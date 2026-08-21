@@ -1,0 +1,14 @@
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# env files
+.env
+.env.*
+!.env.example
+
+# Operator-provided service factory (see README)
+src/vintasend-templates.config.ts
+
+.DS_Store

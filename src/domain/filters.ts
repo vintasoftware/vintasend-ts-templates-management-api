@@ -5,17 +5,22 @@
  * cannot do case-insensitive `includes` gets an exact match instead, and a field the backend
  * cannot filter on at all is dropped rather than failing the request. Dropping an unsupported
  * filter is the contract's choice; failing the request is not.
+ *
+ * Ordering goes the other way and 400s — see `buildOrderBy` for why the asymmetry is deliberate.
  */
 
 import {
   type ManagedTemplateFilterCapabilities,
   type ManagedTemplateFilterFields,
+  type ManagedTemplateOrderBy,
   type ManagedTemplateStatus,
   type ManagedTemplateStatusFilter,
+  orderByCapabilityKey,
   type StringFieldFilter,
   supportsCapability,
 } from 'vintasend-managed-templates';
 
+import { ApiError } from '../errors.js';
 import type { TemplateListQueryInput } from './schemas.js';
 
 /**
@@ -173,4 +178,50 @@ export function buildBackendFilter(
   }
 
   return filter;
+}
+
+/**
+ * The requested order, or nothing when none was asked for.
+ *
+ * Unlike a filter, an order the backend cannot apply is a **400 rather than a silent drop**. The
+ * two are not symmetrical: dropping a filter returns more rows than the caller asked for, which
+ * is visible in the response, while dropping an order returns exactly the right rows in an
+ * arbitrary sequence, which nothing in the response reveals. A client that renders those rows
+ * under a highlighted column header is then displaying a sort that never happened.
+ *
+ * `GET /capabilities` lists the `orderBy.*` keys, so a client can offer only the columns the
+ * configured backend can sort by and never provoke this.
+ *
+ * @throws ApiError 400 if the field is not one this backend declares it can order by.
+ */
+export function buildOrderBy(
+  query: TemplateListQueryInput,
+  capabilities: ManagedTemplateFilterCapabilities,
+): ManagedTemplateOrderBy | undefined {
+  if (query.orderByField === undefined) {
+    // A direction on its own has nothing to order, and silently ignoring it would hide a
+    // client bug that looks exactly like a backend that cannot sort.
+    if (query.orderByDirection !== undefined) {
+      throw ApiError.badRequest(
+        'orderByDirection was given without orderByField, so there is nothing to order by.',
+        { orderByDirection: query.orderByDirection },
+      );
+    }
+    return undefined;
+  }
+
+  const capability = orderByCapabilityKey(query.orderByField);
+  if (!supportsCapability(capabilities, capability)) {
+    throw ApiError.badRequest(
+      `The configured template backend cannot order by '${query.orderByField}'. ` +
+        'GET /capabilities lists the fields it can order by.',
+      { orderByField: query.orderByField, capability },
+    );
+  }
+
+  return {
+    field: query.orderByField,
+    // Ascending is the FHIR and SQL default, and the one a reader assumes when none is named.
+    direction: query.orderByDirection ?? 'asc',
+  };
 }

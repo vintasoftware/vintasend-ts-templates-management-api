@@ -129,7 +129,27 @@ export const versionQuerySchema = z.object({
  */
 export const statusHistoryQuerySchema = versionQuerySchema;
 
+/**
+ * Ordering, which unlike the filters has **no default**.
+ *
+ * Every `orderBy.*` capability defaults to false, so most backends can sort by nothing. Defaulting
+ * to a field here would make the common listing a 400 against them; omitting the parameter asks
+ * for the backend's own order, which is what an unordered listing has always returned.
+ */
+export const templateOrderByFieldSchema = z.enum([
+  'key',
+  'name',
+  'version',
+  'status',
+  'createdAt',
+  'updatedAt',
+]);
+
+export const templateOrderByDirectionSchema = z.enum(['asc', 'desc']);
+
 export const templateListQuerySchema = paginationQuerySchema.extend({
+  orderByField: templateOrderByFieldSchema.optional(),
+  orderByDirection: templateOrderByDirectionSchema.optional(),
   key: trimmedNonEmpty.optional(),
   name: trimmedNonEmpty.optional(),
   description: trimmedNonEmpty.optional(),

@@ -153,11 +153,12 @@ export type ListResponse<T> = {
 };
 
 /**
- * Filter capabilities advertised by the configured template backend. Consumers use it to hide
- * filtering affordances the backend cannot honour.
+ * Filter and ordering capabilities advertised by the configured template backend. Consumers use
+ * it to hide affordances the backend cannot honour.
  *
- * There are deliberately no `orderBy.*` keys: the template-manager seam takes no ordering
- * argument, so the list endpoint offers no ordering to negotiate.
+ * `orderBy.*` keys report which fields `GET /templates` can sort by. They default to false, so a
+ * backend that cannot sort reports nothing orderable — offer no sortable columns rather than
+ * asking and getting a 400.
  */
 export type FilterCapabilities = Record<string, boolean>;
 

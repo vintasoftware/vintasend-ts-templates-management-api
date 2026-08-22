@@ -94,12 +94,25 @@ describe('GET /api/v1/capabilities', () => {
     expect(body.data['logical.and']).toBe(true);
   });
 
-  it('offers no ordering to negotiate, because the seam takes none', async () => {
+  it('publishes an orderBy key for every orderable field', async () => {
+    // A client builds its sortable columns from these, so a missing key is a column that
+    // silently does nothing rather than one that is simply absent.
     const api = createHarness();
 
     const { body } = await api.json<DataResponse<FilterCapabilities>>('/api/v1/capabilities');
 
-    expect(Object.keys(body.data).filter((key) => key.startsWith('orderBy.'))).toEqual([]);
+    expect(
+      Object.keys(body.data)
+        .filter((key) => key.startsWith('orderBy.'))
+        .sort(),
+    ).toEqual([
+      'orderBy.createdAt',
+      'orderBy.key',
+      'orderBy.name',
+      'orderBy.status',
+      'orderBy.updatedAt',
+      'orderBy.version',
+    ]);
   });
 });
 

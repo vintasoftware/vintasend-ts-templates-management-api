@@ -13,6 +13,7 @@ import type {
   ManagedTemplateCreateInput,
   ManagedTemplateFilter,
   ManagedTemplateFilterCapabilities,
+  ManagedTemplateOrderBy,
   ManagedTemplateStatus,
   ManagedTemplateStatusHistory,
   ManagedTemplateTag,
@@ -40,6 +41,7 @@ export type ManagedTemplateServicePort = {
     filters: ManagedTemplateFilter,
     page: number,
     pageSize: number,
+    orderBy?: ManagedTemplateOrderBy,
   ): Promise<ManagedTemplate[]>;
 
   setStatus(

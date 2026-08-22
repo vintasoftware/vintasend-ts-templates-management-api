@@ -18,8 +18,16 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import {
+  MANAGED_TEMPLATE_ORDER_BY_FIELDS,
+  orderByCapabilityKey,
+} from 'vintasend-managed-templates';
 import { describe, expect, it } from 'vitest';
 
+import {
+  templateOrderByDirectionSchema,
+  templateOrderByFieldSchema,
+} from '../src/domain/schemas.js';
 import { createHarness, createInput, type Harness } from './helpers/fixtures.js';
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
@@ -122,5 +130,78 @@ describe('openapi.yaml', () => {
     }
 
     expect(response.status).toBeLessThan(500);
+  });
+});
+
+/**
+ * The ordering vocabulary, pinned in three places at once.
+ *
+ * `openapi.yaml` is shared with the Python implementation and is the thing that must not drift.
+ * These check that the spec, the zod schema this server validates with, and the library's own
+ * list of orderable fields all name the same set — so a field added to one of them and forgotten
+ * in the others fails here rather than in a client.
+ */
+describe('the ordering vocabulary', () => {
+  /** The enum a query parameter declares in `openapi.yaml`, read without a YAML parser. */
+  function declaredEnum(parameterName: string): string[] {
+    const yaml = readFileSync(
+      fileURLToPath(new URL('../openapi.yaml', import.meta.url)),
+      'utf8',
+    ).split('\n');
+
+    const start = yaml.findIndex((line) => line.trim() === `name: ${parameterName}`);
+    expect(start, `${parameterName} is not declared in openapi.yaml`).toBeGreaterThan(-1);
+
+    const values: string[] = [];
+    let inEnum = false;
+    for (const line of yaml.slice(start + 1)) {
+      const trimmed = line.trim();
+      // `anyOf` puts the enum in a list item, so it arrives as `- enum:` rather than `enum:`.
+      if (trimmed === 'enum:' || trimmed === '- enum:') {
+        inEnum = true;
+        continue;
+      }
+      if (inEnum) {
+        if (trimmed.startsWith('- ')) {
+          values.push(trimmed.slice(2));
+          continue;
+        }
+        break;
+      }
+      // Another parameter began before any enum did.
+      if (trimmed.startsWith('name: ')) break;
+    }
+    return values;
+  }
+
+  it('declares the same orderable fields in the spec, the schema and the library', () => {
+    const inSpec = declaredEnum('orderByField').sort();
+    const inSchema = [...templateOrderByFieldSchema.options].sort();
+    const inLibrary = [...MANAGED_TEMPLATE_ORDER_BY_FIELDS].sort();
+
+    expect(inSpec).toEqual(inSchema);
+    expect(inSpec).toEqual(inLibrary);
+  });
+
+  it('declares the same directions in the spec and the schema', () => {
+    expect(declaredEnum('orderByDirection').sort()).toEqual(
+      [...templateOrderByDirectionSchema.options].sort(),
+    );
+  });
+
+  it('publishes a capability key for every field the spec accepts', () => {
+    // A field the API will accept but the capability report never mentions is one a client
+    // cannot discover, and one that falls to the false default and always 400s.
+    const api = createHarness({
+      capabilities: Object.fromEntries(
+        MANAGED_TEMPLATE_ORDER_BY_FIELDS.map((field) => [orderByCapabilityKey(field), true]),
+      ),
+    });
+
+    const published = api.service.getBackendSupportedFilterCapabilities();
+
+    for (const field of declaredEnum('orderByField')) {
+      expect(published).toHaveProperty(`orderBy.${field}`);
+    }
   });
 });

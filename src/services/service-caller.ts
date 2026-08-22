@@ -17,6 +17,7 @@ import {
   ManagedTemplateInvalidFilterError,
   ManagedTemplateInvalidTagError,
   ManagedTemplateNotFoundError,
+  type ManagedTemplateOrderBy,
   type ManagedTemplateStatus,
   type ManagedTemplateStatusHistory,
   ManagedTemplateStatusTransitionError,
@@ -154,9 +155,10 @@ export class ServiceCaller {
     filters: ManagedTemplateFilter,
     page: number,
     pageSize: number,
+    orderBy?: ManagedTemplateOrderBy,
   ): Promise<ManagedTemplate[]> {
     return translating({}, () =>
-      this.service.getPaginatedFilteredTemplates(filters, page, pageSize),
+      this.service.getPaginatedFilteredTemplates(filters, page, pageSize, orderBy),
     );
   }
 

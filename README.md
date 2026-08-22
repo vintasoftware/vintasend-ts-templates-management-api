@@ -84,7 +84,7 @@ Every `/api/v1` route requires the API key. `/health` does not — load balancer
 
 | | |
 |---|---|
-| `GET /api/v1/templates` | List, filtered. One row per key by default |
+| `GET /api/v1/templates` | List, filtered and optionally ordered. One row per key by default |
 | `POST /api/v1/templates` | Create a template's first version |
 | `GET /api/v1/templates/{key}` | One version; latest when `version` is omitted |
 | `DELETE /api/v1/templates/{key}` | Delete one version; latest when `version` is omitted |
@@ -153,8 +153,26 @@ a registered context generator from.
 **Filters are negotiated, not assumed.** `GET /api/v1/capabilities` reports what the configured
 backend can do, and a filter it cannot honour is *dropped* rather than failing the request. A
 string filter degrades in steps: case-insensitive substring, then case-insensitive exact, then
-plain equality. There are deliberately no `orderBy.*` capabilities — the seam's paginated reads
-take no ordering argument, so the list endpoint offers none to negotiate.
+plain equality.
+
+**Ordering is negotiated the other way — it 400s.** `orderByField` and `orderByDirection` on
+`GET /api/v1/templates` are checked against the `orderBy.*` capability keys, and an order the
+backend cannot apply is refused. The asymmetry with filters is the point:
+
+| | Unsupported filter | Unsupported order |
+|---|---|---|
+| What happens | dropped, request succeeds | `400 BAD_REQUEST` |
+| If it were ignored | more rows than asked for | the same rows in an arbitrary sequence |
+| Can the client tell? | yes, from the rows | no |
+
+A client that rendered an unordered page under a highlighted "sorted by name" header would be
+showing a sort that never happened. Build the sortable columns from `/api/v1/capabilities` and the
+400 never fires.
+
+Neither parameter has a default: every `orderBy.*` key defaults to false, so a default would make
+the ordinary listing a 400 against most backends. Omitting them asks for the backend's own order.
+`orderByDirection` on its own is a 400 too — silently ignoring it looks exactly like a backend that
+cannot sort, which hides the client bug.
 
 **Errors carry a code.** Branch on `error.code`, not on `error.message`.
 

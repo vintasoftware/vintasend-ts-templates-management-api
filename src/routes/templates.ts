@@ -21,7 +21,7 @@ import type {
   TemplatePreviewOut,
   TemplateStatusHistoryOut,
 } from '../contract/types.js';
-import { buildBackendFilter } from '../domain/filters.js';
+import { buildBackendFilter, buildOrderBy } from '../domain/filters.js';
 import {
   createTemplateBodySchema,
   createVersionBodySchema,
@@ -87,10 +87,11 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
   // --- system ------------------------------------------------------------------------------
 
   /**
-   * Which filters the configured template backend can honour.
+   * Which filters and orders the configured template backend can honour.
    *
-   * Note there are no `orderBy.*` keys: the template-manager seam takes no ordering argument, so
-   * the list endpoint offers no ordering to negotiate.
+   * `orderBy.*` keys report which fields `GET /templates` can sort by. They default to false, so
+   * a backend that cannot sort reports nothing orderable and a client should offer no sortable
+   * columns — asking for one anyway is a 400 rather than an unordered page that looks sorted.
    */
   routes.get('/capabilities', async (c) => {
     const service = await deps.getService();
@@ -116,10 +117,12 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
     const query = c.req.valid('query');
     const service = await deps.getService();
 
+    const capabilities = service.getCapabilities();
     const templates = await service.getPaginatedFilteredTemplates(
-      buildBackendFilter(query, service.getCapabilities()),
+      buildBackendFilter(query, capabilities),
       query.page,
       query.pageSize,
+      buildOrderBy(query, capabilities),
     );
 
     const rows = templates.map((template) => out(service, template));

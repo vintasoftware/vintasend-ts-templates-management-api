@@ -36,9 +36,11 @@ paths:
       description: 'Which filters and orders the configured template backend can honour.
 
 
-        ``orderBy.*`` keys report which fields ``GET /templates`` can sort by. They default
+        ``orderBy.*`` keys report which fields ``GET /templates`` can sort by. They
+        default
 
-        to false, so a backend that cannot sort reports nothing orderable and a client should
+        to false, so a backend that cannot sort reports nothing orderable and a client
+        should
 
         offer no sortable columns. See ``capabilities.py``.'
       tags:
@@ -1559,14 +1561,14 @@ components:
         key instead of one per version.
 
 
-        ``orderByField`` and ``orderByDirection`` have no default: most backends can order
-        by
+        ``orderByField`` and ``orderByDirection`` have no default: most backends can
+        order by
 
-        nothing, so a default would make the common listing a 400 against them. Omitted asks
-        for
+        nothing, so a default would make the common listing a 400 against them. Omitted
+        asks for
 
-        the backend own order. An order the backend cannot apply is a 400 rather than a
-        silent
+        the backend own order. An order the backend cannot apply is a 400 rather than
+        a silent
 
         drop -- unlike a dropped filter, a dropped order leaves no trace in the rows.'
       properties:

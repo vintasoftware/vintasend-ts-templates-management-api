@@ -1,6 +1,6 @@
 {
   "name": "vintasend-templates-management-api",
-  "version": "0.1.0",
+  "version": "1.0.0-alpha1",
   "description": "REST API for managing VintaSend notification templates: versions, the status lifecycle, tags, composition and previews",
   "license": "MIT",
   "author": "Vinta Software",
@@ -30,7 +30,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.5",
+    "@biomejs/biome": "^2.5.10",
     "@types/node": "^25.0.8",
     "tsx": "^4.19.3",
     "typescript": "^5.9.3",

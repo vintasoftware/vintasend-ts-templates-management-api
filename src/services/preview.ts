@@ -1,11 +1,12 @@
 /**
  * Renders one version of a template against a caller-supplied context.
  *
- * This is the endpoint's reason to exist. A managed renderer's own `render` resolves a key to
- * whatever version the backend hands back, so it can never show an unpublished draft.
- * `ManagedTemplateService.renderTemplate` takes the template as an argument instead, so fetching
- * an explicit version first is what makes previewing a draft — before anyone activates it —
- * possible.
+ * This is the endpoint's reason to exist. A managed renderer's own `render` is the send path: it
+ * resolves an unpinned key to the newest *active* version, so it never shows an unpublished draft
+ * — and for a key with nothing published it may render an application's registered fallback
+ * instead of anything stored. `ManagedTemplateService.renderTemplate` takes the template as an
+ * argument and never falls back, so fetching an explicit version first is what makes previewing a
+ * draft — before anyone activates it — possible.
  *
  * Two things this module has to supply that a real send would already have.
  *

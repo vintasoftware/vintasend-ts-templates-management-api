@@ -7,7 +7,7 @@
  * one more caller of it, not a second implementation of it.
  */
 
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import type { JsonObject } from 'vintasend';
 import type { ManagedTemplate, ManagedTemplateStatus } from 'vintasend-managed-templates';
 
@@ -43,8 +43,12 @@ import { buildTemplatePreview } from '../services/preview.js';
 import type { ServiceCaller } from '../services/service-caller.js';
 import { readOptionalJson, validate } from './validation.js';
 
+/** Resolves the identity a status change is attributed to. See `AppDependencies.resolveActor`. */
+export type ActorResolver = (c: Context) => string | null | Promise<string | null>;
+
 export type TemplateRoutesDependencies = {
   getService: () => Promise<ServiceCaller>;
+  resolveActor?: ActorResolver;
 };
 
 function versionParam(raw: string): number {
@@ -68,18 +72,24 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
     template: ManagedTemplate,
   ): DataResponse<ManagedTemplateOut> => ({ data: out(service, template) });
 
-  /** Body shared by the four status routes, which differ only in how the target is chosen. */
+  /**
+   * Body shared by the four status routes, which differ only in how the target is chosen.
+   *
+   * Attribution comes from the host's `resolveActor` when one is configured, replacing anything
+   * the body claims; the body's `changedBy` is only used when there is no resolver.
+   */
   const changeStatus = async (
-    key: string,
+    c: Context,
     status: ManagedTemplateStatus,
     payload: { version?: number | null; changedBy?: string | null },
   ): Promise<DataResponse<ManagedTemplateOut>> => {
+    const changedBy = deps.resolveActor ? await deps.resolveActor(c) : (payload.changedBy ?? null);
     const service = await deps.getService();
     const template = await service.setStatus(
-      key,
+      c.req.param('key') as string,
       status,
       payload.version ?? null,
-      payload.changedBy ?? null,
+      changedBy,
     );
     return data(service, template);
   };
@@ -223,6 +233,12 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
     return c.json<DataResponse<ManagedTemplateOut>>(data(service, template));
   });
 
+  /**
+   * Delete one version that was never published.
+   *
+   * A version that was ever published is refused with a 409 `CONFLICT`: a notification may be
+   * pinned to it, and its status history is the record of who published it. Archive it instead.
+   */
   routes.delete('/templates/:key/versions/:version', async (c) => {
     const service = await deps.getService();
     await service.deleteTemplate(c.req.param('key'), versionParam(c.req.param('version')));
@@ -297,25 +313,25 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
    */
   routes.post('/templates/:key/status', validate('json', setStatusBodySchema), async (c) => {
     const body = c.req.valid('json');
-    return c.json(await changeStatus(c.req.param('key'), body.status, body));
+    return c.json(await changeStatus(c, body.status, body));
   });
 
   /**
    * Publish one version.
    *
    * Other versions of the same key that are already active are left alone: a key may hold several
-   * active versions at once, and choosing between them is the host application's call, not this
-   * API's.
+   * active versions at once. An unpinned send renders the highest-numbered active version, so
+   * activating an older version while a newer one is active does not change what is sent.
    */
   routes.post('/templates/:key/activate', async (c) => {
     const body = statusChangeBodySchema.parse(await readOptionalJson(c));
-    return c.json(await changeStatus(c.req.param('key'), 'active', body));
+    return c.json(await changeStatus(c, 'active', body));
   });
 
   /** Retire one version without archiving it, so it can be activated again later. */
   routes.post('/templates/:key/deactivate', async (c) => {
     const body = statusChangeBodySchema.parse(await readOptionalJson(c));
-    return c.json(await changeStatus(c.req.param('key'), 'inactive', body));
+    return c.json(await changeStatus(c, 'inactive', body));
   });
 
   /**
@@ -324,7 +340,7 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
    */
   routes.post('/templates/:key/archive', async (c) => {
     const body = statusChangeBodySchema.parse(await readOptionalJson(c));
-    return c.json(await changeStatus(c.req.param('key'), 'archived', body));
+    return c.json(await changeStatus(c, 'archived', body));
   });
 
   /**
@@ -386,6 +402,10 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
    * This deletes a *version*, never a whole key: the seam has no operation that removes every
    * version at once, and doing it here as a loop would be a multi-step deletion with no
    * transaction around it.
+   *
+   * Only a version that was never published can be deleted; anything else is a 409 `CONFLICT`.
+   * That includes the latest version when `version` is omitted, so this route cannot remove a
+   * published version by accident. Prefer naming the version.
    */
   routes.delete('/templates/:key', validate('query', versionQuerySchema), async (c) => {
     const service = await deps.getService();

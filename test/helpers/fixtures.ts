@@ -24,7 +24,7 @@ import {
   ManagedTemplateService,
 } from 'vintasend-managed-templates';
 
-import { createApp } from '../../src/app.js';
+import { type AppDependencies, createApp } from '../../src/app.js';
 import type { ManagedTemplateServicePort } from '../../src/services/template-service-port.js';
 
 export const API_KEY = 'test-api-key';
@@ -77,7 +77,13 @@ export type Harness = {
   json: <T>(path: string, init?: RequestInit) => Promise<{ status: number; body: T }>;
 };
 
-export function createHarness(options: { capabilities?: Record<string, boolean> } = {}): Harness {
+export function createHarness(
+  options: {
+    capabilities?: Record<string, boolean>;
+    resolveActor?: AppDependencies['resolveActor'];
+    onUnhandledError?: AppDependencies['onUnhandledError'];
+  } = {},
+): Harness {
   const backend = new InMemoryTemplateManagerBackend();
   if (options.capabilities) {
     Object.assign(backend, { getFilterCapabilities: () => options.capabilities });
@@ -91,6 +97,8 @@ export function createHarness(options: { capabilities?: Record<string, boolean> 
   const app = createApp({
     apiKey: API_KEY,
     getService: async () => service as unknown as ManagedTemplateServicePort,
+    resolveActor: options.resolveActor,
+    onUnhandledError: options.onUnhandledError,
   });
 
   const request = (path: string, init: RequestInit = {}): Promise<Response> =>

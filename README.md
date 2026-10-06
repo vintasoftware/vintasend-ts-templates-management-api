@@ -87,11 +87,11 @@ Every `/api/v1` route requires the API key. `/health` does not — load balancer
 | `GET /api/v1/templates` | List, filtered and optionally ordered. One row per key by default |
 | `POST /api/v1/templates` | Create a template's first version |
 | `GET /api/v1/templates/{key}` | One version; latest when `version` is omitted |
-| `DELETE /api/v1/templates/{key}` | Delete one version; latest when `version` is omitted |
+| `DELETE /api/v1/templates/{key}` | Delete one never-published version; latest when `version` is omitted |
 | `GET /api/v1/templates/{key}/versions` | Every version, newest first |
 | `POST /api/v1/templates/{key}/versions` | Create the next version from the latest |
 | `GET /api/v1/templates/{key}/versions/{version}` | One version |
-| `DELETE /api/v1/templates/{key}/versions/{version}` | Delete one version |
+| `DELETE /api/v1/templates/{key}/versions/{version}` | Delete one never-published version |
 | `GET /api/v1/templates/{key}/composition` | What the engine will actually receive |
 | `POST /api/v1/templates/{key}/preview` | Render a version against a supplied context |
 | `PUT /api/v1/templates/{key}/tags` | Retag a version, in place |
@@ -136,8 +136,18 @@ should not fork a version and drop it back to draft.
 
 **`allowedTransitions` is on every template payload.** Read it rather than discovering the
 lifecycle by catching 409s. A move it does not list comes back as a 409 with code
-`INVALID_STATUS_TRANSITION`; a version may hold several `active` siblings at once, because choosing
-between them is the host application's call.
+`INVALID_STATUS_TRANSITION`. A version may hold several `active` siblings at once; an unpinned send
+renders the highest-numbered active version, and never a draft.
+
+**Only a never-published version can be deleted.** A version that was ever activated is refused
+with a 409 `CONFLICT` — a notification may be pinned to it, and its status history is the record of
+who published it. Archive it instead. That applies to `DELETE /templates/{key}` with no `version`
+too, which resolves to the latest version, so prefer naming the version you mean.
+
+**Attribution is the host's to resolve.** The status routes accept `changedBy` in the body, but a
+host that knows who is calling should pass `resolveActor` to `createApp` (see
+[Embedding it](#embedding-it)). Its answer then replaces whatever the body says, so a caller holding
+the API key cannot write someone else's name into the audit trail.
 
 **Composition happens before any engine runs.** The stored `bodyTemplate` is only half the template
 when it extends a base — `GET /templates/{key}/composition` is what actually renders, and
@@ -181,11 +191,17 @@ cannot sort, which hides the client bug.
 | `BAD_REQUEST` | 400 | Invalid input; `details.issues` lists the fields |
 | `UNAUTHORIZED` | 401 | Missing or wrong API key |
 | `NOT_FOUND` | 404 | No such template, version, tag or route |
-| `CONFLICT` | 409 | A tag whose text already slugs onto an existing one |
+| `CONFLICT` | 409 | A tag whose text already slugs onto an existing one, or deleting a published version |
 | `INVALID_STATUS_TRANSITION` | 409 | The lifecycle does not allow that move |
 | `PREVIEW_UNAVAILABLE` | 409 | The template would not render |
 | `TEMPLATE_COMPOSITION_ERROR` | 409 | The template could not be assembled |
-| `INTERNAL_ERROR` | 500 | Unexpected; logged in full, reported generically |
+| `INTERNAL_ERROR` | 500 | Unexpected; reported generically, with an `X-Request-Id` header |
+
+An unexpected error is logged as one line — its class name, the request id and the route pattern —
+and never with its message, its stack, the request body or a preview context: errors from the
+template store or the engine can carry template content and context values, which in the
+applications this API serves can be health data. Pass `onUnhandledError` to `createApp` to send
+errors somewhere with its own scrubbing instead.
 
 ## Embedding it
 
@@ -199,8 +215,16 @@ const app = createApp({
   apiKey: process.env.MANAGED_TEMPLATE_API_KEY,
   getService: async () => myConfiguredService,
   corsOrigins: ['https://admin.example'],
+  // Who made a status change. Replaces any `changedBy` in the request body.
+  resolveActor: (c) => c.get('user')?.email ?? null,
+  // Every error not mapped to a contract error. Defaults to a single redacted log line.
+  onUnhandledError: (error, c, { requestId }) => errorTracker.capture(error, { requestId }),
 });
 ```
+
+`resolveActor` may be async, and `null` records the change as unattributed. Without it, `changedBy`
+comes from the request body — fine only when everyone holding the API key is trusted to attribute
+honestly.
 
 ## Development
 

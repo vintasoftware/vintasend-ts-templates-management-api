@@ -12,6 +12,7 @@ import {
   ManagedTemplateChangeUserNotFoundError,
   ManagedTemplateCompositionError,
   type ManagedTemplateCreateInput,
+  ManagedTemplateDeletionNotAllowedError,
   type ManagedTemplateFilter,
   type ManagedTemplateFilterCapabilities,
   ManagedTemplateInvalidFilterError,
@@ -47,7 +48,8 @@ type Subject = {
  * because a base that does not exist is a broken composition of a template that *does*. Reporting
  * it as a 404 would say the template the caller asked for is missing, when it is there and cannot
  * be assembled — which is the difference between "you asked for the wrong thing" and "this
- * template needs fixing".
+ * template needs fixing". `ManagedTemplateNoActiveVersionError` is a not-found subclass and maps
+ * to 404 with it: from a send's point of view, a key with nothing published has nothing to show.
  */
 function toApiError(error: unknown, subject: Subject): unknown {
   if (error instanceof ApiError) {
@@ -58,6 +60,11 @@ function toApiError(error: unknown, subject: Subject): unknown {
   }
   if (error instanceof ManagedTemplateStatusTransitionError) {
     return ApiError.invalidTransition(error.message);
+  }
+  if (error instanceof ManagedTemplateDeletionNotAllowedError) {
+    // The version exists and the request was well-formed; deleting it would erase what a pinned
+    // notification renders and who published it. The message says to archive instead.
+    return ApiError.conflict(error.message);
   }
   if (error instanceof ManagedTemplateTagAlreadyExistsError) {
     // A collision is a conflict rather than a validation error: the request was well-formed, and

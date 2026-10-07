@@ -347,7 +347,9 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
    * Render a version against a supplied context, whatever its status.
    *
    * Pinning `version` is the point: it is what lets a draft be reviewed before anyone activates
-   * it. Omitting it previews the latest version.
+   * it. Omitting it previews the latest version, draft included. That is not what a send renders:
+   * a send never renders a draft, only the newest active version, and for a key with nothing
+   * published it may render a default the application registered instead.
    *
    * A template that fails to render comes back as a 409 `PREVIEW_UNAVAILABLE` carrying the
    * renderer's message, because a broken template is what the caller asked to find out.

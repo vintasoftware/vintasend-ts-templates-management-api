@@ -164,6 +164,36 @@ describe('unhandled errors', () => {
     expect(seen[0]?.route).toBe('/api/v1/templates/:key');
     expect(consoleError).not.toHaveBeenCalled();
   });
+
+  it('falls back to the redacted line when the injected handler throws', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const api = failingApi({
+      onUnhandledError: () => {
+        throw new Error(`handler broke while holding ${sensitive}`);
+      },
+    });
+
+    const response = await api.request('/api/v1/templates/welcome', {
+      headers: { 'x-request-id': 'req-7' },
+    });
+
+    expect(response.status).toBe(500);
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError.mock.calls[0]).toEqual([
+      '[vintasend-templates-api] unhandled TypeError (request req-7) on GET /api/v1/templates/:key',
+    ]);
+  });
+
+  it('still answers 500 when the default log line itself fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {
+      throw new Error('logging is broken');
+    });
+    const api = failingApi();
+
+    const response = await api.request('/api/v1/templates/welcome');
+
+    expect(response.status).toBe(500);
+  });
 });
 
 describe('deleting', () => {

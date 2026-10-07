@@ -201,7 +201,8 @@ An unexpected error is logged as one line — its class name, the request id and
 and never with its message, its stack, the request body or a preview context: errors from the
 template store or the engine can carry template content and context values, which in the
 applications this API serves can be health data. Pass `onUnhandledError` to `createApp` to send
-errors somewhere with its own scrubbing instead.
+errors somewhere with its own scrubbing instead; if it throws, the default line is logged in its
+place, and what it threw is not.
 
 ## Embedding it
 

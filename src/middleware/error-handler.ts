@@ -56,6 +56,35 @@ export function logUnhandledError(
   );
 }
 
+/**
+ * Hand `error` to the configured handler, falling back to `logUnhandledError` if it throws.
+ *
+ * The error is still recorded somewhere when a host's handler breaks. What the handler threw is
+ * never logged — it is no safer than the error it was handling — and a broken logging setup must
+ * not turn a 500 into a crash.
+ */
+async function reportUnhandledError(
+  handler: UnhandledErrorHandler,
+  error: Error,
+  c: Context,
+  requestId: string,
+): Promise<void> {
+  try {
+    await handler(error, c, { requestId });
+    return;
+  } catch {
+    // Fall through to the default line.
+  }
+  if (handler === logUnhandledError) {
+    return;
+  }
+  try {
+    logUnhandledError(error, c, { requestId });
+  } catch {
+    // Nothing left to report to.
+  }
+}
+
 export function createErrorHandler(
   onUnhandledError: UnhandledErrorHandler = logUnhandledError,
 ): ErrorHandler {
@@ -72,12 +101,7 @@ export function createErrorHandler(
     }
 
     const requestId = requestIdFor(c);
-    try {
-      await onUnhandledError(error, c, { requestId });
-    } catch {
-      // A failing error hook must not turn a 500 into a crash, and what it threw is no safer to
-      // log than the error it was handling.
-    }
+    await reportUnhandledError(onUnhandledError, error, c, requestId);
 
     c.header(REQUEST_ID_HEADER, requestId);
     return c.json<ApiErrorResponse>(

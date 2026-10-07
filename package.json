@@ -1,6 +1,6 @@
 {
   "name": "vintasend-templates-management-api",
-  "version": "1.0.0-alpha2",
+  "version": "1.0.0-alpha4",
   "description": "REST API for managing VintaSend notification templates: versions, the status lifecycle, tags, composition and previews",
   "license": "MIT",
   "author": "Vinta Software",
@@ -25,8 +25,8 @@
     "@hono/node-server": "^1.14.0",
     "@hono/zod-validator": "^0.4.3",
     "hono": "^4.7.0",
-    "vintasend": "1.0.0-alpha2",
-    "vintasend-managed-templates": "1.0.0-alpha2",
+    "vintasend": "1.0.0-alpha4",
+    "vintasend-managed-templates": "1.0.0-alpha4",
     "zod": "^3.24.2"
   },
   "devDependencies": {

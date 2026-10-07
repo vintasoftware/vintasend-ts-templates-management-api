@@ -38,7 +38,8 @@ export type AppDependencies = {
   /**
    * Receives every error the API does not map to a contract error. Defaults to a single log line
    * with the error's class name, a request id and the route — never the error object, the request
-   * body or a preview context. The client gets the generic 500 either way.
+   * body or a preview context. If the handler throws, that default line is logged instead. The
+   * client gets the generic 500 either way.
    */
   onUnhandledError?: UnhandledErrorHandler;
 };

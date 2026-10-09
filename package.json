@@ -1,6 +1,6 @@
 {
   "name": "vintasend-templates-management-api",
-  "version": "1.0.0-alpha5",
+  "version": "1.0.0-alpha6",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vintasoftware/vintasend-ts-templates-management-api.git"
@@ -45,16 +45,16 @@
     "zod": "^3.24.2"
   },
   "peerDependencies": {
-    "vintasend": "^1.0.0-alpha5",
-    "vintasend-managed-templates": "^1.0.0-alpha5"
+    "vintasend": "^1.0.0-alpha6",
+    "vintasend-managed-templates": "^1.0.0-alpha6"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.10",
     "@types/node": "^25.0.8",
     "tsx": "^4.19.3",
     "typescript": "^5.9.3",
-    "vintasend": "1.0.0-alpha5",
-    "vintasend-managed-templates": "1.0.0-alpha5",
+    "vintasend": "1.0.0-alpha6",
+    "vintasend-managed-templates": "1.0.0-alpha6",
     "vitest": "^4.0.18"
   },
   "engines": {

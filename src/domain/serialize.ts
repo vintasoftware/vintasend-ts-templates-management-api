@@ -5,9 +5,8 @@
  * omitted) so JSON responses are uniform. Ids are stringified whatever a backend keys on, so a
  * store on integers, strings or UUIDs all produce the same shape.
  *
- * The library and the wire agree on nearly every field name — both are camelCase — which is why
- * this module is short. The one place they differ is `TemplateStatusHistoryOut.changedBy`, which
- * the library spells the same way; there is nothing to translate, only to shape.
+ * The library and the wire spell every field the same way — both are camelCase — which is why this
+ * module is short: there is nothing to translate, only to shape.
  */
 
 import type {

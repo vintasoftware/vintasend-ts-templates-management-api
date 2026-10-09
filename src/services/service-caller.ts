@@ -1,9 +1,10 @@
 /**
  * The service, with the library's exceptions already translated into the contract's errors.
  *
- * Every method here throws `ApiError` and nothing else from the library's hierarchy, so a route
- * never has to decide what a given failure means on the wire — and so the mapping is written once
- * rather than once per handler.
+ * Every method here except `renderTemplate` throws `ApiError` and nothing else from the library's
+ * hierarchy, so a route never has to decide what a given failure means on the wire — and so the
+ * mapping is written once rather than once per handler. `renderTemplate` passes the library's
+ * errors through, because only the preview knows what a render failure means.
  */
 
 import type { JsonObject } from 'vintasend';
@@ -263,19 +264,20 @@ export class ServiceCaller {
   // --- composition ---------------------------------------------------------------------------
 
   /**
-   * One version assembled the way the template engine will receive it.
+   * A version already in hand, assembled the way the template engine will receive it.
+   *
+   * Takes the template rather than its key, so the caller's one read is the version that gets
+   * composed. Composing still reads the store, for whatever the template extends or includes.
    *
    * Composition failures are the template's, not the request's: a base that does not exist, a
    * chain that loops, a malformed tag. They are reported as `TEMPLATE_COMPOSITION_ERROR` carrying
    * the library's message, which names the chain it failed on — the message is the point, since it
-   * is what makes the template fixable.
+   * is what makes the template fixable. A store failing while composing is not translated, and
+   * reaches the error handler as a 500.
    */
-  async getComposedTemplate(
-    templateKey: string,
-    version: number | null = null,
-  ): Promise<ManagedTemplate> {
-    return translating({ templateKey, version }, () =>
-      this.service.getComposedTemplate(templateKey, version),
+  async composeTemplate(template: ManagedTemplate): Promise<ManagedTemplate> {
+    return translating({ templateKey: template.key, version: template.version }, () =>
+      this.service.composeTemplate(template),
     );
   }
 
@@ -303,7 +305,11 @@ export class ServiceCaller {
    * Render a template already in hand, with no second backend read.
    *
    * The template is fetched by the caller so a preview can pin an explicit version — which is the
-   * point of previewing a draft that has not been activated.
+   * point of previewing a draft that has not been activated. Hand it a template from
+   * `composeTemplate`: the library composes again before rendering, which for a composed template
+   * finds no `managed_*` tag and reads nothing.
+   *
+   * Unlike every other method here, errors are passed through untranslated.
    */
   async renderTemplate(
     notification: never,

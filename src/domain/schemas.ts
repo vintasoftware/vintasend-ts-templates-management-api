@@ -122,6 +122,17 @@ export const versionQuerySchema = z.object({
 });
 
 /**
+ * The path of a route that names one version: `/templates/{key}/versions/{version}`.
+ *
+ * Validated like any other input. Read loosely, `1abc` and `1.9` would both name version 1 — and a
+ * `DELETE` would delete it.
+ */
+export const versionPathSchema = z.object({
+  key: z.string(),
+  version: z.coerce.number().int().min(1),
+});
+
+/**
  * `version` on the status-history endpoint, where omitting it means every version.
  *
  * This is the one place an absent version does *not* mean "the latest": it is forwarded to the
@@ -200,34 +211,33 @@ export const createTemplateBodySchema = z.object({
  * `templateManagedBackend` or `tenant` here — neither can change across versions of one key.
  *
  * A body with nothing set is accepted and produces a new version identical to the latest, which is
- * a legitimate way to branch a version off for a status change.
+ * a legitimate way to branch a version off for a status change. So is no body at all.
  */
-export const createVersionBodySchema = z
-  .object({
-    name: z.string().min(1).max(255).nullish(),
-    description: z.string().max(2000).nullish(),
-    bodyTemplate: z.string().min(1).max(MAX_TEMPLATE_LENGTH).nullish(),
-    subjectTemplate: z.string().max(MAX_TEMPLATE_LENGTH).nullish(),
-    preheaderTemplate: z.string().max(MAX_TEMPLATE_LENGTH).nullish(),
-    /**
-     * Unlike the other fields here, tags distinguish omitted from empty: omitting carries the
-     * previous version's tags forward, `[]` creates the version with none.
-     */
-    tags: tagWriteList.nullish(),
-  })
-  .default({});
+export const createVersionBodySchema = z.object({
+  name: z.string().min(1).max(255).nullish(),
+  description: z.string().max(2000).nullish(),
+  bodyTemplate: z.string().min(1).max(MAX_TEMPLATE_LENGTH).nullish(),
+  subjectTemplate: z.string().max(MAX_TEMPLATE_LENGTH).nullish(),
+  preheaderTemplate: z.string().max(MAX_TEMPLATE_LENGTH).nullish(),
+  /**
+   * Unlike the other fields here, tags distinguish omitted from empty: omitting (or `null`)
+   * carries the previous version's tags forward, `[]` creates the version with none.
+   */
+  tags: tagWriteList.nullish(),
+});
 
-/** Body of the named lifecycle routes (activate / deactivate / archive). */
-export const statusChangeBodySchema = z
-  .object({
-    version: z.number().int().min(1).nullish(),
-    /**
-     * Passed to the service untouched, `null` included: the service requires no attribution on a
-     * status change and this API adds no policy of its own.
-     */
-    changedBy: z.string().max(255).nullish(),
-  })
-  .default({});
+/**
+ * Body of the named lifecycle routes (activate / deactivate / archive). Optional: an omitted body
+ * acts on the latest version.
+ */
+export const statusChangeBodySchema = z.object({
+  version: z.number().int().min(1).nullish(),
+  /**
+   * Passed to the service untouched, `null` included: the service requires no attribution on a
+   * status change and this API adds no policy of its own.
+   */
+  changedBy: z.string().max(255).nullish(),
+});
 
 export const setStatusBodySchema = z.object({
   version: z.number().int().min(1).nullish(),
@@ -251,13 +261,12 @@ export const setTemplateTagsBodySchema = z.object({
  *
  * `context` is rendered verbatim. Nothing is generated: this API has no notification to resolve a
  * registered context generator from, and a preview is meant to show what a given context produces.
+ * Optional: an omitted body previews the latest version against an empty context.
  */
-export const previewBodySchema = z
-  .object({
-    context: z.record(z.unknown()).default({}),
-    version: z.number().int().min(1).nullish(),
-  })
-  .default({});
+export const previewBodySchema = z.object({
+  context: z.record(z.unknown()).default({}),
+  version: z.number().int().min(1).nullish(),
+});
 
 export const tagListQuerySchema = paginationQuerySchema.extend({
   status: repeatable(tagStatusSchema).optional(),
@@ -290,6 +299,7 @@ export const updateTagBodySchema = z.object({
 export type TemplateListQueryInput = z.infer<typeof templateListQuerySchema>;
 export type TagListQueryInput = z.infer<typeof tagListQuerySchema>;
 export type VersionQueryInput = z.infer<typeof versionQuerySchema>;
+export type VersionPathInput = z.infer<typeof versionPathSchema>;
 export type CreateTemplateBodyInput = z.infer<typeof createTemplateBodySchema>;
 export type CreateVersionBodyInput = z.infer<typeof createVersionBodySchema>;
 export type StatusChangeBodyInput = z.infer<typeof statusChangeBodySchema>;

@@ -31,6 +31,7 @@ import {
   statusChangeBodySchema,
   statusHistoryQuerySchema,
   templateListQuerySchema,
+  versionPathSchema,
   versionQuerySchema,
 } from '../domain/schemas.js';
 import {
@@ -39,27 +40,14 @@ import {
   serializeTemplate,
 } from '../domain/serialize.js';
 import { ApiError, describeMissing } from '../errors.js';
+import { authenticated } from '../middleware/authenticate.js';
 import { buildTemplatePreview } from '../services/preview.js';
 import type { ServiceCaller } from '../services/service-caller.js';
-import { readOptionalJson, validate } from './validation.js';
-
-/** Resolves the identity a status change is attributed to. See `AppDependencies.resolveActor`. */
-export type ActorResolver = (c: Context) => string | null | Promise<string | null>;
+import { validate } from './validation.js';
 
 export type TemplateRoutesDependencies = {
   getService: () => Promise<ServiceCaller>;
-  resolveActor?: ActorResolver;
 };
-
-function versionParam(raw: string): number {
-  const version = Number.parseInt(raw, 10);
-  if (!Number.isInteger(version) || version < 1) {
-    throw ApiError.badRequest('Invalid request.', {
-      issues: [{ path: 'version', message: 'Must be an integer of 1 or greater' }],
-    });
-  }
-  return version;
-}
 
 export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
   const routes = new Hono();
@@ -75,15 +63,16 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
   /**
    * Body shared by the four status routes, which differ only in how the target is chosen.
    *
-   * Attribution comes from the host's `resolveActor` when one is configured, replacing anything
-   * the body claims; the body's `changedBy` is only used when there is no resolver.
+   * Attribution comes from the authenticator when it named an actor, replacing anything the body
+   * claims; the body's `changedBy` is only used when it did not.
    */
   const changeStatus = async (
     c: Context,
     status: ManagedTemplateStatus,
-    payload: { version?: number | null; changedBy?: string | null },
+    payload: { version?: number | null | undefined; changedBy?: string | null | undefined },
   ): Promise<DataResponse<ManagedTemplateOut>> => {
-    const changedBy = deps.resolveActor ? await deps.resolveActor(c) : (payload.changedBy ?? null);
+    const { actor } = authenticated(c);
+    const changedBy = actor === undefined ? (payload.changedBy ?? null) : actor;
     const service = await deps.getService();
     const template = await service.setStatus(
       c.req.param('key') as string,
@@ -128,21 +117,35 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
     const service = await deps.getService();
 
     const capabilities = service.getCapabilities();
+    const filter = buildBackendFilter(query, capabilities);
+    const orderBy = buildOrderBy(query, capabilities);
     const templates = await service.getPaginatedFilteredTemplates(
-      buildBackendFilter(query, capabilities),
+      filter,
       query.page,
       query.pageSize,
-      buildOrderBy(query, capabilities),
+      orderBy,
     );
 
-    const rows = templates.map((template) => out(service, template));
+    // The seam has no count, so whether another page has a row is asked directly: a full page is
+    // followed by a one-row read of the first row after it, which is page `page * pageSize + 1` of
+    // one-row pages. (Asking for `pageSize + 1` rows would not do: the seam pages by number, so a
+    // bigger page starts somewhere else.) A short page is the last one without asking.
+    const hasMore =
+      templates.length === query.pageSize &&
+      (
+        await service.getPaginatedFilteredTemplates(
+          filter,
+          query.page * query.pageSize + 1,
+          1,
+          orderBy,
+        )
+      ).length > 0;
+
     return c.json<PaginatedResponse<ManagedTemplateOut>>({
-      data: rows,
+      data: templates.map((template) => out(service, template)),
       page: query.page,
       pageSize: query.pageSize,
-      // True when the page came back full, meaning another page may exist. The seam has no count
-      // method, so no total is available.
-      hasMore: rows.length === query.pageSize,
+      hasMore,
     });
   });
 
@@ -204,7 +207,7 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
    *
    * Templates are versioned rather than edited in place, which is why this is a POST that creates
    * a resource and not a PATCH that mutates one: an already-published version is never modified.
-   * Fields left unset are carried over from the latest version.
+   * Fields left unset are carried over from the latest version, so the body may be omitted.
    */
   routes.post('/templates/:key/versions', validate('json', createVersionBodySchema), async (c) => {
     const body = c.req.valid('json');
@@ -216,22 +219,24 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
       bodyTemplate: body.bodyTemplate ?? null,
       subjectTemplate: body.subjectTemplate ?? null,
       preheaderTemplate: body.preheaderTemplate ?? null,
-      // `undefined` carries the previous version's tags forward; `[]` clears them. Collapsing
-      // the two here would make an explicit "no tags" indistinguishable from silence.
-      tags: body.tags === undefined ? undefined : (body.tags ?? null),
+      // An omitted `tags` and `null` both carry the previous version's tags forward; `[]` clears
+      // them, and survives `??`.
+      tags: body.tags ?? null,
     });
 
     return c.json<DataResponse<ManagedTemplateOut>>(data(service, template), 201);
   });
 
-  routes.get('/templates/:key/versions/:version', async (c) => {
-    const service = await deps.getService();
-    const template = await service.getTemplate(
-      c.req.param('key'),
-      versionParam(c.req.param('version')),
-    );
-    return c.json<DataResponse<ManagedTemplateOut>>(data(service, template));
-  });
+  routes.get(
+    '/templates/:key/versions/:version',
+    validate('param', versionPathSchema),
+    async (c) => {
+      const { key, version } = c.req.valid('param');
+      const service = await deps.getService();
+      const template = await service.getTemplate(key, version);
+      return c.json<DataResponse<ManagedTemplateOut>>(data(service, template));
+    },
+  );
 
   /**
    * Delete one version that was never published.
@@ -239,11 +244,16 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
    * A version that was ever published is refused with a 409 `CONFLICT`: a notification may be
    * pinned to it, and its status history is the record of who published it. Archive it instead.
    */
-  routes.delete('/templates/:key/versions/:version', async (c) => {
-    const service = await deps.getService();
-    await service.deleteTemplate(c.req.param('key'), versionParam(c.req.param('version')));
-    return c.body(null, 204);
-  });
+  routes.delete(
+    '/templates/:key/versions/:version',
+    validate('param', versionPathSchema),
+    async (c) => {
+      const { key, version } = c.req.valid('param');
+      const service = await deps.getService();
+      await service.deleteTemplate(key, version);
+      return c.body(null, 204);
+    },
+  );
 
   /**
    * One version assembled the way the template engine will receive it.
@@ -266,8 +276,11 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
     const version = c.req.valid('query').version ?? null;
     const service = await deps.getService();
 
+    // One read: composing the template in hand rather than reading it again by key keeps the
+    // references, the flag and the composed sources about the same version, even when a new
+    // version lands between two reads of an unpinned key.
     const template = await service.getTemplate(key, version);
-    const composed = await service.getComposedTemplate(key, version);
+    const composed = await service.composeTemplate(template);
 
     return c.json<DataResponse<TemplateCompositionOut>>({
       data: serializeComposition(
@@ -323,24 +336,21 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
    * active versions at once. An unpinned send renders the highest-numbered active version, so
    * activating an older version while a newer one is active does not change what is sent.
    */
-  routes.post('/templates/:key/activate', async (c) => {
-    const body = statusChangeBodySchema.parse(await readOptionalJson(c));
-    return c.json(await changeStatus(c, 'active', body));
+  routes.post('/templates/:key/activate', validate('json', statusChangeBodySchema), async (c) => {
+    return c.json(await changeStatus(c, 'active', c.req.valid('json')));
   });
 
   /** Retire one version without archiving it, so it can be activated again later. */
-  routes.post('/templates/:key/deactivate', async (c) => {
-    const body = statusChangeBodySchema.parse(await readOptionalJson(c));
-    return c.json(await changeStatus(c, 'inactive', body));
+  routes.post('/templates/:key/deactivate', validate('json', statusChangeBodySchema), async (c) => {
+    return c.json(await changeStatus(c, 'inactive', c.req.valid('json')));
   });
 
   /**
    * Archive one version. Terminal under the default lifecycle: an archived version has no allowed
    * transitions, and publishing a new version is the way forward from there.
    */
-  routes.post('/templates/:key/archive', async (c) => {
-    const body = statusChangeBodySchema.parse(await readOptionalJson(c));
-    return c.json(await changeStatus(c, 'archived', body));
+  routes.post('/templates/:key/archive', validate('json', statusChangeBodySchema), async (c) => {
+    return c.json(await changeStatus(c, 'archived', c.req.valid('json')));
   });
 
   /**
@@ -351,11 +361,14 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
    * a send never renders a draft, only the newest active version, and for a key with nothing
    * published it may render a default the application registered instead.
    *
-   * A template that fails to render comes back as a 409 `PREVIEW_UNAVAILABLE` carrying the
-   * renderer's message, because a broken template is what the caller asked to find out.
+   * A broken template is what the caller asked to find out, so it is a 409 carrying the message
+   * that makes the draft fixable, and the code says what to fix. One that cannot be composed is a
+   * `TEMPLATE_COMPOSITION_ERROR` naming the chain, the same answer `GET /composition` gives; one
+   * that composes but fails to render is a `PREVIEW_UNAVAILABLE` carrying the renderer's message.
+   * A failure reading the store is a generic 500, like any other unexpected error.
    */
-  routes.post('/templates/:key/preview', async (c) => {
-    const body = previewBodySchema.parse(await readOptionalJson(c));
+  routes.post('/templates/:key/preview', validate('json', previewBodySchema), async (c) => {
+    const body = c.req.valid('json');
     const service = await deps.getService();
     const template = await service.getTemplate(c.req.param('key'), body.version ?? null);
 

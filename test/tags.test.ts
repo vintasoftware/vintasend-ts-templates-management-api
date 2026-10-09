@@ -67,6 +67,21 @@ describe('GET /api/v1/tags', () => {
     expect(second.body.data[0]?.slug).not.toBe(first.body.data[0]?.slug);
   });
 
+  it('offers no next page when the list exactly fills the last one', async () => {
+    const first = await api.json<PaginatedResponse<ManagedTemplateTagOut>>(
+      '/api/v1/tags?page=1&pageSize=1',
+    );
+    const last = await api.json<PaginatedResponse<ManagedTemplateTagOut>>(
+      '/api/v1/tags?page=2&pageSize=1',
+    );
+    const whole =
+      await api.json<PaginatedResponse<ManagedTemplateTagOut>>('/api/v1/tags?pageSize=2');
+
+    expect(first.body.hasMore).toBe(true);
+    expect([last.body.data.length, last.body.hasMore]).toEqual([1, false]);
+    expect([whole.body.data.length, whole.body.hasMore]).toEqual([2, false]);
+  });
+
   it('rejects an unknown status value', async () => {
     const { status } = await api.json('/api/v1/tags?status=nope');
 

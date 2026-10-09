@@ -1,16 +1,33 @@
 {
   "name": "vintasend-templates-management-api",
   "version": "1.0.0-alpha5",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vintasoftware/vintasend-ts-templates-management-api.git"
+  },
   "description": "REST API for managing VintaSend notification templates: versions, the status lifecycle, tags, composition and previews",
   "license": "MIT",
   "author": "Vinta Software",
   "type": "module",
   "main": "./dist/exports.js",
   "types": "./dist/exports.d.ts",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/vintasoftware/vintasend-ts-templates-management-api.git"
+  "exports": {
+    ".": {
+      "types": "./dist/exports.d.ts",
+      "import": "./dist/exports.js"
+    },
+    "./openapi.yaml": "./openapi.yaml",
+    "./package.json": "./package.json"
   },
+  "bin": {
+    "vintasend-templates-management-api": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "openapi.yaml",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -25,18 +42,30 @@
     "@hono/node-server": "^1.14.0",
     "@hono/zod-validator": "^0.4.3",
     "hono": "^4.7.0",
-    "vintasend": "1.0.0-alpha5",
-    "vintasend-managed-templates": "1.0.0-alpha5",
     "zod": "^3.24.2"
+  },
+  "peerDependencies": {
+    "vintasend": "^1.0.0-alpha5",
+    "vintasend-managed-templates": "^1.0.0-alpha5"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.10",
     "@types/node": "^25.0.8",
     "tsx": "^4.19.3",
     "typescript": "^5.9.3",
+    "vintasend": "1.0.0-alpha5",
+    "vintasend-managed-templates": "1.0.0-alpha5",
     "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "keywords": [
+    "vintasend",
+    "templates",
+    "notifications",
+    "api",
+    "hono",
+    "openapi"
+  ]
 }

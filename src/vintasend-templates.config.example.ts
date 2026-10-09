@@ -15,7 +15,7 @@
 // import { MedplumClient } from '@medplum/core';
 // import { ManagedTemplateEmailRenderer, ManagedTemplateService } from 'vintasend-managed-templates';
 // import { MedplumTemplateManagerBackend } from 'vintasend-medplum-template-manager';
-// import { PugEmailTemplateRendererFactory } from 'vintasend-pug';
+// import { LiquidEmailTemplateRendererFactory } from 'vintasend-liquidjs';
 
 export default async function createManagedTemplateService() {
   throw new Error(
@@ -33,7 +33,16 @@ export default async function createManagedTemplateService() {
   //
   // // The inner renderer is handed template *source*, not a path — every VintaSend renderer
   // // implements `renderFromTemplateContent`, which is the seam that takes source.
-  // const innerRenderer = new PugEmailTemplateRendererFactory<Config>().create();
+  // //
+  // // Liquid rather than Pug: managed templates are source anyone with access to this API can
+  // // edit, and Pug compiles a template to JavaScript and runs it. The limits bound what an edited
+  // // template can cost to render.
+  // const innerRenderer = new LiquidEmailTemplateRendererFactory<Config>().create({
+  //   parseLimit: 1_000_000,
+  //   renderLimit: 1_000,
+  //   memoryLimit: 100_000_000,
+  //   strictFilters: true,
+  // });
   // const renderer = new ManagedTemplateEmailRenderer<Config>(managerBackend, innerRenderer);
   //
   // return new ManagedTemplateService<Config>(managerBackend, renderer);

@@ -11,10 +11,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { errorMessage } from '../errors.js';
-import {
-  asManagedTemplateServicePort,
-  type ManagedTemplateServicePort,
-} from './template-service-port.js';
+import type { ManagedTemplateServicePort } from './template-service-port.js';
 
 export type ManagedTemplateServiceFactory = () => Promise<unknown> | unknown;
 
@@ -22,6 +19,65 @@ type ServiceModule = {
   default?: ManagedTemplateServiceFactory;
   createManagedTemplateService?: ManagedTemplateServiceFactory;
 };
+
+/**
+ * The methods a loaded service must have for this API to work at all.
+ *
+ * Checked here and nowhere else: a module loaded from a path is untyped whatever it declares, so
+ * this is the one place a wrong service can arrive. A host injecting its service through
+ * `createApp` is checked by `ManagedTemplateServicePort` at compile time.
+ */
+export const REQUIRED_SERVICE_METHODS = [
+  'getBackendSupportedFilterCapabilities',
+  'createTemplate',
+  'getTemplate',
+  'updateTemplate',
+  'deleteTemplate',
+  'getTemplateVersions',
+  'getPaginatedFilteredTemplates',
+  'setStatus',
+  'getStatusHistory',
+  'allowedTransitionsFor',
+  'getTags',
+  'getTag',
+  'createTag',
+  'updateTag',
+  'setTagStatus',
+  'deleteTag',
+  'setTemplateTags',
+  'composeTemplate',
+  'getTemplateReferences',
+  'isAbstract',
+  'renderTemplate',
+] as const satisfies readonly (keyof ManagedTemplateServicePort)[];
+
+/**
+ * Check a loaded service against the port, naming what is missing.
+ *
+ * Turns "the factory returned the wrong thing" into a startup failure that says which methods it
+ * lacked, rather than a `TypeError` on the first request that reaches one of them.
+ */
+export function asManagedTemplateServicePort(service: unknown): ManagedTemplateServicePort {
+  if (service === null || typeof service !== 'object') {
+    throw new Error(
+      `Expected a ManagedTemplateService, got ${service === null ? 'null' : typeof service}.`,
+    );
+  }
+
+  const candidate = service as Record<string, unknown>;
+  const missing = REQUIRED_SERVICE_METHODS.filter(
+    (method) => typeof candidate[method] !== 'function',
+  );
+
+  if (missing.length > 0) {
+    throw new Error(
+      'The configured service is not a ManagedTemplateService: it is missing ' +
+        `${missing.join(', ')}.`,
+    );
+  }
+
+  return service as ManagedTemplateServicePort;
+}
 
 function resolveModuleSpecifier(modulePath: string): string {
   if (modulePath.startsWith('.') || isAbsolute(modulePath)) {

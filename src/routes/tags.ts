@@ -58,7 +58,8 @@ export function createTagRoutes(deps: TagRoutesDependencies): Hono {
       data: page.map(serializeTag),
       page: query.page,
       pageSize: query.pageSize,
-      hasMore: page.length === query.pageSize,
+      // The whole list is in hand, so this is exact.
+      hasMore: query.page * query.pageSize < tags.length,
     });
   });
 

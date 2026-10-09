@@ -9,15 +9,10 @@
  * What it asserts is narrow on purpose: that the server *routed* the request. A handler answering
  * 404 for a template that does not exist is a route working correctly; the app's own not-found
  * handler answering "No route matches …" is not. The behaviour behind each route is pinned by the
- * other suites.
- *
- * The parse is a small scan rather than a YAML library: the shape it reads — a `paths:` block of
- * two-space-indented paths, each with four-space-indented methods — is fixed by the generator, and
- * a dependency for four lines of it would be the larger cost.
+ * other suites — and every request they make through the harness is checked to answer only
+ * statuses its operation declares (see `helpers/contract.ts`).
  */
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import {
   MANAGED_TEMPLATE_ORDER_BY_FIELDS,
   orderByCapabilityKey,
@@ -28,52 +23,8 @@ import {
   templateOrderByDirectionSchema,
   templateOrderByFieldSchema,
 } from '../src/domain/schemas.js';
+import { declaredOperations, readOpenApi, undeclaredStatus } from './helpers/contract.js';
 import { createHarness, createInput, type Harness } from './helpers/fixtures.js';
-
-const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
-
-type Operation = { method: (typeof HTTP_METHODS)[number]; path: string };
-
-function declaredOperations(): Operation[] {
-  const yaml = readFileSync(
-    fileURLToPath(new URL('../openapi.yaml', import.meta.url)),
-    'utf8',
-  ).split('\n');
-
-  const operations: Operation[] = [];
-  let inPaths = false;
-  let currentPath: string | null = null;
-
-  for (const line of yaml) {
-    if (line === 'paths:') {
-      inPaths = true;
-      continue;
-    }
-    if (!inPaths) {
-      continue;
-    }
-    // A top-level key ends the paths block.
-    if (/^\S/.test(line)) {
-      break;
-    }
-
-    const pathMatch = /^ {2}(\/\S*):\s*$/.exec(line);
-    if (pathMatch) {
-      currentPath = pathMatch[1] as string;
-      continue;
-    }
-
-    const methodMatch = /^ {4}([a-z]+):\s*$/.exec(line);
-    if (methodMatch && currentPath !== null) {
-      const method = methodMatch[1] as string;
-      if ((HTTP_METHODS as readonly string[]).includes(method)) {
-        operations.push({ method: method as Operation['method'], path: currentPath });
-      }
-    }
-  }
-
-  return operations;
-}
 
 /** Fill `{key}` / `{version}` / `{slug}` with values the fixture store actually holds. */
 function concretePath(path: string): string {
@@ -105,7 +56,7 @@ async function seed(api: Harness): Promise<void> {
 
 describe('openapi.yaml', () => {
   it('declares the endpoints this repository is expected to serve', () => {
-    const operations = declaredOperations();
+    const operations = declaredOperations().map(({ method, path }) => ({ method, path }));
 
     expect(operations.length).toBeGreaterThan(20);
     expect(operations).toContainEqual({ method: 'get', path: '/health' });
@@ -113,23 +64,66 @@ describe('openapi.yaml', () => {
     expect(operations).toContainEqual({ method: 'delete', path: '/api/v1/tags/{slug}' });
   });
 
-  it.each(declaredOperations())('routes $method $path', async ({ method, path }) => {
-    const api = createHarness();
-    await seed(api);
+  it.each(declaredOperations().map(({ method, path }) => ({ method, path })))(
+    'routes $method $path',
+    async ({ method, path }) => {
+      const api = createHarness();
+      await seed(api);
 
-    const body = BODIES[`${method} ${path}`];
-    const response = await api.request(concretePath(path), {
-      method: method.toUpperCase(),
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+      const body = BODIES[`${method} ${path}`];
+      const response = await api.request(concretePath(path), {
+        method: method.toUpperCase(),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
 
-    // 404 is a legitimate answer from a handler; "no route matches" is not.
-    if (response.status === 404) {
-      const payload = (await response.json()) as { error: { message: string } };
-      expect(payload.error.message).not.toMatch(/No route matches/);
+      // 404 is a legitimate answer from a handler; "no route matches" is not.
+      if (response.status === 404) {
+        const payload = (await response.json()) as { error: { message: string } };
+        expect(payload.error.message).not.toMatch(/No route matches/);
+      }
+
+      expect(response.status).toBeLessThan(500);
+    },
+  );
+
+  it('declares a 400 on the routes that take a version in the path', () => {
+    const versioned = declaredOperations().filter(
+      ({ path }) => path === '/api/v1/templates/{key}/versions/{version}',
+    );
+
+    expect(versioned.map(({ method }) => method).sort()).toEqual(['delete', 'get']);
+    for (const operation of versioned) {
+      expect(operation.statuses).toContain('400');
     }
+  });
 
-    expect(response.status).toBeLessThan(500);
+  it('declares a 403 on every authenticated route', () => {
+    for (const operation of declaredOperations()) {
+      if (operation.path.startsWith('/api/v1/')) {
+        expect(operation.statuses, `${operation.method} ${operation.path}`).toContain('403');
+      }
+    }
+  });
+});
+
+describe('the declared-status check', () => {
+  // The harness runs it on every response, so it is only worth having if it actually fails.
+  it('reports a client error the operation does not declare', () => {
+    expect(undeclaredStatus('GET', '/api/v1/templates/welcome/versions/1', 400)).toBeUndefined();
+    expect(undeclaredStatus('GET', '/api/v1/templates/welcome/versions/1', 409)).toMatch(
+      /GET \/api\/v1\/templates\/\{key\}\/versions\/\{version\} answered 409/,
+    );
+  });
+
+  it('matches the literal route before a parameter that could also match', () => {
+    expect(undeclaredStatus('GET', '/api/v1/templates/welcome/versions', 400)).toMatch(
+      /\{key\}\/versions answered 400/,
+    );
+  });
+
+  it('leaves server errors and unknown routes alone', () => {
+    expect(undeclaredStatus('GET', '/api/v1/templates/welcome', 500)).toBeUndefined();
+    expect(undeclaredStatus('GET', '/api/v1/nope', 404)).toBeUndefined();
   });
 });
 
@@ -144,10 +138,7 @@ describe('openapi.yaml', () => {
 describe('the ordering vocabulary', () => {
   /** The enum a query parameter declares in `openapi.yaml`, read without a YAML parser. */
   function declaredEnum(parameterName: string): string[] {
-    const yaml = readFileSync(
-      fileURLToPath(new URL('../openapi.yaml', import.meta.url)),
-      'utf8',
-    ).split('\n');
+    const yaml = readOpenApi();
 
     const start = yaml.findIndex((line) => line.trim() === `name: ${parameterName}`);
     expect(start, `${parameterName} is not declared in openapi.yaml`).toBeGreaterThan(-1);

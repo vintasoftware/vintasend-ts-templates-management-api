@@ -1,40 +1,39 @@
 /**
  * Builds the HTTP application.
  *
- * The one thing the API needs from the outside world — a configured `ManagedTemplateService` — is
- * injected, so the app can be exercised in tests without a database, a template engine, or a FHIR
- * server.
+ * What the API needs from the outside world — who the caller is, and a configured
+ * `ManagedTemplateService` — is injected, so the app can be exercised in tests without a database,
+ * a template engine, or a FHIR server, and mounted behind a host's own authentication.
  */
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
 import { API_VERSION, type HealthResponse } from './contract/types.js';
-import { apiKeyAuth } from './middleware/api-key-auth.js';
+import { type Authenticator, authenticateWith } from './middleware/authenticate.js';
 import {
   createErrorHandler,
   handleNotFound,
   type UnhandledErrorHandler,
 } from './middleware/error-handler.js';
 import { createTagRoutes } from './routes/tags.js';
-import { type ActorResolver, createTemplateRoutes } from './routes/templates.js';
+import { createTemplateRoutes } from './routes/templates.js';
 import { ServiceCaller } from './services/service-caller.js';
 import type { ManagedTemplateServicePort } from './services/template-service-port.js';
 
 export type AppDependencies = {
-  apiKey: string;
+  /**
+   * Runs before every `/api/v1` route. It refuses a caller by throwing `ApiError.unauthorized` or
+   * `ApiError.forbidden`, and otherwise may name the caller as `actor`, which every status change
+   * then records as `changedBy` in place of anything the request body claims.
+   *
+   * `apiKeyAuthenticator(key)` is the shared-secret case. It names no actor, so `changedBy` comes
+   * from the body; that is only safe when every caller holding the key is trusted to attribute
+   * honestly.
+   */
+  authenticate: Authenticator;
   getService: () => Promise<ManagedTemplateServicePort>;
   corsOrigins?: string[];
-  /**
-   * Who is making this request, for the status audit trail.
-   *
-   * When set, its answer is what every status change records as `changedBy` — any `changedBy` in
-   * the request body is ignored, so a caller cannot write someone else's identity into the trail.
-   * `null` records the change as unattributed. Leave it unset and `changedBy` is taken from the
-   * body, as before; that is only safe when every caller holding the API key is trusted to
-   * attribute honestly.
-   */
-  resolveActor?: ActorResolver;
   /**
    * Receives every error the API does not map to a contract error. Defaults to a single log line
    * with the error's class name, a request id and the route — never the error object, the request
@@ -82,11 +81,11 @@ export function createApp(deps: AppDependencies): Hono {
   }
 
   // Unauthenticated and outside the versioned prefix: load balancers and container health checks
-  // have no API key.
+  // have no credentials.
   app.get('/health', (c) => c.json<HealthResponse>({ status: 'ok', apiVersion: API_VERSION }));
 
-  app.use(`${API_BASE_PATH}/*`, apiKeyAuth(deps.apiKey));
-  app.route(API_BASE_PATH, createTemplateRoutes({ getService, resolveActor: deps.resolveActor }));
+  app.use(`${API_BASE_PATH}/*`, authenticateWith(deps.authenticate));
+  app.route(API_BASE_PATH, createTemplateRoutes({ getService }));
   app.route(API_BASE_PATH, createTagRoutes({ getService }));
 
   return app;

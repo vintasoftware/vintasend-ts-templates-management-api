@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
@@ -8,8 +11,11 @@ import type {
   FilterCapabilities,
   HealthResponse,
 } from '../src/contract/types.js';
-import { loadTemplateService } from '../src/services/service-loader.js';
-import { asManagedTemplateServicePort } from '../src/services/template-service-port.js';
+import { apiKeyAuthenticator } from '../src/middleware/authenticate.js';
+import {
+  asManagedTemplateServicePort,
+  loadTemplateService,
+} from '../src/services/service-loader.js';
 import { API_KEY, createHarness } from './helpers/fixtures.js';
 
 describe('authentication', () => {
@@ -167,7 +173,7 @@ describe('CORS', () => {
   it('echoes an allowed origin and refuses the rest', async () => {
     const api = createHarness();
     const app = createApp({
-      apiKey: API_KEY,
+      authenticate: apiKeyAuthenticator(API_KEY),
       getService: async () => api.service as never,
       corsOrigins: ['https://allowed.example'],
     });
@@ -181,6 +187,59 @@ describe('CORS', () => {
 
     expect(allowed.headers.get('access-control-allow-origin')).toBe('https://allowed.example');
     expect(refused.headers.get('access-control-allow-origin')).toBeNull();
+  });
+});
+
+describe('the app outside Node', () => {
+  /** Every module `createApp` loads, following relative imports from `src/app.ts`. */
+  function appModules(): Map<string, string> {
+    const modules = new Map<string, string>();
+    const pending = [fileURLToPath(new URL('../src/app.ts', import.meta.url))];
+    while (pending.length > 0) {
+      const file = pending.pop() as string;
+      if (modules.has(file)) continue;
+      const source = readFileSync(file, 'utf8');
+      modules.set(file, source);
+      for (const [, specifier] of source.matchAll(/from '(\.[^']+)\.js'/g)) {
+        pending.push(resolve(dirname(file), `${specifier}.ts`));
+      }
+    }
+    return modules;
+  }
+
+  it('loads no Node built-in, so it can run wherever fetch does', () => {
+    // Hosts mount it in a browser over the in-memory store, Storybook included. The server
+    // entrypoint and the module-path service loader are Node-only, and `createApp` loads neither.
+    const modules = appModules();
+
+    expect(modules.size).toBeGreaterThan(10);
+    for (const [file, source] of modules) {
+      expect(source, file).not.toMatch(/from 'node:|\bBuffer\./);
+    }
+  });
+});
+
+describe('apiKeyAuthenticator', () => {
+  it('names no actor, so a status change keeps the changedBy in the body', async () => {
+    const api = createHarness();
+    await api.service.createTemplate({
+      key: 'welcome',
+      name: 'welcome',
+      description: '',
+      templateManagedBackend: 'in-memory',
+      bodyTemplate: 'x',
+      subjectTemplate: null,
+      preheaderTemplate: null,
+      tenant: null,
+    });
+
+    await api.request('/api/v1/templates/welcome/activate', {
+      method: 'POST',
+      body: JSON.stringify({ changedBy: 'ana' }),
+    });
+
+    const history = await api.service.getStatusHistory('welcome');
+    expect(history[0]?.changedBy).toBe('ana');
   });
 });
 

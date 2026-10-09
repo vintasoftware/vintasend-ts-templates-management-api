@@ -18,11 +18,43 @@ A client generated from it works against either server, operationIds included.
 
 This repository does not generate the file — it satisfies it. `test/contract.test.ts` walks every
 path and method the file declares and asserts the server routes them, so a route added on one side
-and not the other is a failing test rather than a surprise for a client.
+and not the other is a failing test rather than a surprise for a client. Every request the test
+suite makes is also checked against the statuses its operation declares, so a route answering a
+status a generated client was never told about fails the test that provoked it.
 
 `src/contract/types.ts` is the same contract as TypeScript types, importable by a UI.
 
-## Quick start
+## Two ways to run it
+
+**Mounted in your own server** — the usual case for an app that already has one. `createApp` returns
+a [Hono](https://hono.dev) app, which takes a standard `Request` and returns a `Response`, so it
+mounts in a Next.js route handler, in TanStack Start, behind Express, or anywhere else that speaks
+`fetch`. You hand it the `ManagedTemplateService` you already built and your own check of who is
+calling. See [Mounting it](#mounting-it).
+
+**On its own** — the `vintasend-templates-management-api` command runs a server configured from
+environment variables, behind one shared API key. See [Running it on its own](#running-it-on-its-own).
+
+## Installing
+
+```bash
+npm install vintasend-templates-management-api vintasend vintasend-managed-templates
+```
+
+`vintasend` and `vintasend-managed-templates` are peer dependencies, and they have to be: the API
+recognises the library's errors — a missing template, a refused transition, a template that cannot
+be composed — by their class, so it must share one copy of the library with the service you build.
+With two copies those answers would all come back as 500s. Install the same release line for all
+three; they are released together, and their versions match.
+
+## Running it on its own
+
+```bash
+MANAGED_TEMPLATE_API_KEY=… MANAGED_TEMPLATE_SERVICE_MODULE=./templates.config.js \
+  npx vintasend-templates-management-api
+```
+
+To work on this repository instead:
 
 ```bash
 cp .env.example .env            # set MANAGED_TEMPLATE_API_KEY
@@ -48,24 +80,38 @@ so a broken deployment does not wait for the first request to say so.
 import { MedplumClient } from '@medplum/core';
 import { ManagedTemplateEmailRenderer, ManagedTemplateService } from 'vintasend-managed-templates';
 import { MedplumTemplateManagerBackend } from 'vintasend-medplum-template-manager';
-import { PugEmailTemplateRendererFactory } from 'vintasend-pug';
+import { LiquidEmailTemplateRendererFactory } from 'vintasend-liquidjs';
 
 export default async function createManagedTemplateService() {
   const medplum = new MedplumClient({ baseUrl: process.env.MEDPLUM_BASE_URL });
   await medplum.startClientLogin(process.env.MEDPLUM_CLIENT_ID, process.env.MEDPLUM_CLIENT_SECRET);
 
   const managerBackend = new MedplumTemplateManagerBackend(medplum);
-  const innerRenderer = new PugEmailTemplateRendererFactory<Config>().create();
+  const innerRenderer = new LiquidEmailTemplateRendererFactory<Config>().create({
+    // Whoever can edit a template here can make it expensive to render. Bound it.
+    parseLimit: 1_000_000, // characters, the longest template this API accepts
+    renderLimit: 1_000, // milliseconds per render
+    memoryLimit: 100_000_000,
+    strictFilters: true,
+  });
   const renderer = new ManagedTemplateEmailRenderer<Config>(managerBackend, innerRenderer);
 
   return new ManagedTemplateService<Config>(managerBackend, renderer);
 }
 ```
 
-The service is checked at startup by the methods it has rather than with `instanceof`: the
-operator's module resolves its own copy of `vintasend-managed-templates`, and two copies of a class
-fail `instanceof` even when they are the same code. A service missing a method is a startup error
-naming which one, not a `TypeError` on the first request that reaches it.
+**Use a renderer that cannot run code.** Managed templates are source anyone with access to this
+API can edit, so the engine that renders them is reachable by everyone who can. Liquid
+(`vintasend-liquidjs`) evaluates expressions and filters only. Pug (`vintasend-pug`) compiles a
+template to JavaScript and runs it — including any `- code` line in it — so with Pug, editing a
+template is running code on the server. Keep Pug for templates that live in your repository.
+
+A service loaded from `MANAGED_TEMPLATE_SERVICE_MODULE` is checked at startup by the methods it has
+rather than with `instanceof`: the operator's module resolves its own copy of
+`vintasend-managed-templates`, and two copies of a class fail `instanceof` even when they are the
+same code. A service missing a method is a startup error naming which one, not a `TypeError` on the
+first request that reaches it. A service a host passes to `createApp` is checked by its type
+instead.
 
 ### Environment
 
@@ -78,7 +124,8 @@ naming which one, not a `TypeError` on the first request that reaches it.
 
 ## Endpoints
 
-Every `/api/v1` route requires the API key. `/health` does not — load balancers have none.
+Every `/api/v1` route goes through the configured authenticator — the API key, for the standalone
+server. `/health` does not — load balancers have no credentials.
 
 ### Templates
 
@@ -128,6 +175,21 @@ Every `/api/v1` route requires the API key. `/health` does not — load balancer
 `active` or `draft` version. Send `false` for the raw listing. A key whose versions are all
 `inactive` or `archived` has no current version and does not appear in the default listing.
 
+That is also why `?status=archived` on its own finds nothing: the status filter applies on top of
+the one row kept per key, which is never `inactive` or `archived`. To find those, send
+`?status=archived&mostRecentActiveVersion=false`.
+
+**`hasMore` means another page has a row.** There is no total — the storage seam cannot count — so
+after a full page the API reads the one row that would come next. A list that exactly fills its
+last page reports `hasMore: false` there.
+
+**Request bodies are JSON.** A request that declares `application/json` (or any `application/*+json`)
+must carry valid JSON, so an empty body there is a 400. A request that declares no media type, or
+another one, counts as an omitted body when its body is empty — which is how the all-optional
+bodies of `activate`, `deactivate`, `archive`, `preview` and `POST /templates/{key}/versions` are
+left out — and is a 400 otherwise. `curl -d` sends form encoding unless told otherwise, so pass
+`-H 'Content-Type: application/json'`; read as `{}`, its body would have acted on the latest version.
+
 **Writes create versions; retagging does not.** `POST /templates/{key}/versions` copies the latest
 version forward and starts the copy in `draft`, so a published version's body never changes under a
 notification that already referenced it. `PUT /templates/{key}/tags` is the one write that edits a
@@ -145,16 +207,18 @@ who published it. Archive it instead. That applies to `DELETE /templates/{key}` 
 too, which resolves to the latest version, so prefer naming the version you mean.
 
 **Attribution is the host's to resolve.** The status routes accept `changedBy` in the body, but a
-host that knows who is calling should pass `resolveActor` to `createApp` (see
-[Embedding it](#embedding-it)). Its answer then replaces whatever the body says, so a caller holding
-the API key cannot write someone else's name into the audit trail.
+host that knows who is calling should return it as `actor` from its authenticator (see
+[Mounting it](#mounting-it)). It then replaces whatever the body says, so a caller cannot write
+someone else's name into the audit trail.
 
 **Composition happens before any engine runs.** The stored `bodyTemplate` is only half the template
 when it extends a base — `GET /templates/{key}/composition` is what actually renders, and
 `POST /templates/{key}/preview` is that rendered against a context. Both report a template that
-cannot be assembled as a 409 (`TEMPLATE_COMPOSITION_ERROR` / `PREVIEW_UNAVAILABLE`) rather than a
-500: the request was fine and the *template* is what needs fixing, so the message names the chain
-that broke.
+cannot be assembled as a 409 `TEMPLATE_COMPOSITION_ERROR` rather than a 500: the request was fine and
+the *template* is what needs fixing, so the message names the chain that broke. A preview of a
+template that assembles but will not render is a 409 `PREVIEW_UNAVAILABLE` carrying the renderer's
+message, so the code says whether to fix the chain or the template. A store failing while
+assembling is a generic 500: its message stays on the server.
 
 **Preview pins a version on purpose.** That is what lets a draft be reviewed before anyone
 activates it. The `context` you send is rendered verbatim — this API has no notification to resolve
@@ -188,14 +252,21 @@ cannot sort, which hides the client bug.
 
 | Code | Status | Means |
 |---|---|---|
-| `BAD_REQUEST` | 400 | Invalid input; `details.issues` lists the fields |
-| `UNAUTHORIZED` | 401 | Missing or wrong API key |
+| `BAD_REQUEST` | 400 | Invalid input; `details.issues` lists what was wrong |
+| `UNAUTHORIZED` | 401 | No valid credential: a missing or wrong API key, or whatever your authenticator refuses |
+| `FORBIDDEN` | 403 | The caller is known and may not do this. Your authenticator's answer; the API key never gives it |
 | `NOT_FOUND` | 404 | No such template, version, tag or route |
 | `CONFLICT` | 409 | A tag whose text already slugs onto an existing one, or deleting a published version |
 | `INVALID_STATUS_TRANSITION` | 409 | The lifecycle does not allow that move |
 | `PREVIEW_UNAVAILABLE` | 409 | The template would not render |
 | `TEMPLATE_COMPOSITION_ERROR` | 409 | The template could not be assembled |
 | `INTERNAL_ERROR` | 500 | Unexpected; reported generically, with an `X-Request-Id` header |
+
+Every 400 carries `details.issues: [{ path, message }]`, whatever the mistake was, so a client reads
+one shape: `path` is the field (dotted when nested), `version` for an invalid version in the path,
+and empty for a body that is not valid JSON or not sent as JSON, or for a refusal from the library
+(which repeats the message). An unsupported order also names `orderByField` and `capability` beside
+`issues`.
 
 An unexpected error is logged as one line — its class name, the request id and the route pattern —
 and never with its message, its stack, the request body or a preview context: errors from the
@@ -204,28 +275,55 @@ applications this API serves can be health data. Pass `onUnhandledError` to `cre
 errors somewhere with its own scrubbing instead; if it throws, the default line is logged in its
 place, and what it threw is not.
 
-## Embedding it
+## Mounting it
 
-The package's main entrypoint exports the app rather than starting a server, so it can be mounted
-inside an existing Node process:
+The package's main entrypoint exports the app rather than starting a server, so it mounts inside a
+server you already run. In a Next.js app router, one catch-all route handler serves every route:
 
 ```ts
-import { createApp } from 'vintasend-templates-management-api';
+// app/api/v1/[...path]/route.ts
+import { ApiError, createApp } from 'vintasend-templates-management-api';
 
 const app = createApp({
-  apiKey: process.env.MANAGED_TEMPLATE_API_KEY,
+  // Runs before every /api/v1 route. Throw to refuse; return the caller as `actor`.
+  authenticate: async (c) => {
+    const user = await mySession(c);
+    if (!user) throw ApiError.unauthorized('Sign in to manage templates.');
+    if (!user.canEditTemplates) throw ApiError.forbidden('You cannot manage templates.');
+    // Recorded as `changedBy` on every status change, in place of anything the body says.
+    return { actor: user.email };
+  },
   getService: async () => myConfiguredService,
   corsOrigins: ['https://admin.example'],
-  // Who made a status change. Replaces any `changedBy` in the request body.
-  resolveActor: (c) => c.get('user')?.email ?? null,
   // Every error not mapped to a contract error. Defaults to a single redacted log line.
   onUnhandledError: (error, c, { requestId }) => errorTracker.capture(error, { requestId }),
 });
+
+const handler = (request: Request) => app.fetch(request);
+export { handler as GET, handler as POST, handler as PUT, handler as PATCH, handler as DELETE };
 ```
 
-`resolveActor` may be async, and `null` records the change as unattributed. Without it, `changedBy`
-comes from the request body — fine only when everyone holding the API key is trusted to attribute
+Behind Express, hand `getRequestListener(app.fetch)` from `@hono/node-server` to a route that keeps
+the path whole — `server.all(...)`, not `server.use('/api/v1', ...)`, which strips the prefix the
+API's routes include.
+
+`authenticate` may be async. Throw `ApiError.unauthorized` for a caller with no valid credential and
+`ApiError.forbidden` for one you know and refuse: a 401 would tell a signed-in user to sign in
+again. An `actor` of `null` records the change as unattributed. Leave `actor` out and `changedBy`
+comes from the request body — fine only when everyone who passes the check is trusted to attribute
 honestly.
+
+For one shared secret, which is what the standalone server uses, pass
+`authenticate: apiKeyAuthenticator(key)`. It compares in constant time and names no actor.
+
+`authenticate` has the same shape in
+[`vintasend-api`](https://github.com/vintasoftware/vintasend-ts-api), the notifications API, so an
+app mounting both passes them one function. It may throw the `ApiError` of either package: both
+recognise an error by its name and code, not by its class.
+
+The app uses Web APIs only — no Node built-ins — so it also runs in a browser, over the library's
+in-memory store, for a Storybook or a demo. The standalone server (`src/index.ts`) and the
+module-path service loader are the Node-only parts.
 
 ## Development
 

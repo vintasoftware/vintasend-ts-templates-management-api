@@ -264,7 +264,7 @@ export const setTemplateTagsBodySchema = z.object({
  * Optional: an omitted body previews the latest version against an empty context.
  */
 export const previewBodySchema = z.object({
-  context: z.record(z.unknown()).default({}),
+  context: z.record(z.string(), z.unknown()).default({}),
   version: z.number().int().min(1).nullish(),
 });
 

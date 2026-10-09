@@ -47,6 +47,21 @@ be composed — by their class, so it must share one copy of the library with th
 With two copies those answers would all come back as 500s. Install the same release line for all
 three; they are released together, and their versions match.
 
+The standalone server also needs `@hono/node-server`. It is an optional peer dependency, so a host
+that mounts `createApp` in its own server does not install a Node HTTP server it never starts:
+
+```bash
+npm install @hono/node-server   # only to run the vintasend-templates-management-api command
+```
+
+The package has three entry points:
+
+| Import | What it holds |
+|---|---|
+| `vintasend-templates-management-api` | `createApp`, the authenticators, `ApiError` and the wire types. No Node built-ins: it loads in a browser. |
+| `vintasend-templates-management-api/testing` | The API in memory, for tests and stories. See [Testing your mount](#testing-your-mount). Loads in a browser too. |
+| `vintasend-templates-management-api/server` | What the standalone command is built from: `loadServerConfig` and the service-module loader. Node only. |
+
 ## Running it on its own
 
 ```bash
@@ -294,6 +309,8 @@ const app = createApp({
     return { actor: user.email };
   },
   getService: async () => myConfiguredService,
+  // Every new template is stored under this backend name, whatever the create request says.
+  templateManagedBackend: 'medplum',
   corsOrigins: ['https://admin.example'],
   // Every error not mapped to a contract error. Defaults to a single redacted log line.
   onUnhandledError: (error, c, { requestId }) => errorTracker.capture(error, { requestId }),
@@ -314,7 +331,24 @@ comes from the request body — fine only when everyone who passes the check is 
 honestly.
 
 For one shared secret, which is what the standalone server uses, pass
-`authenticate: apiKeyAuthenticator(key)`. It compares in constant time and names no actor.
+`authenticate: apiKeyAuthenticator(key)`. It compares in constant time and names no actor. To check
+a token yourself, such as the caller's own identity-provider token, read it with `bearerToken`:
+
+```ts
+import { ApiError, bearerToken } from 'vintasend-templates-management-api';
+
+authenticate: async (c) => {
+  const token = bearerToken(c.req.header('authorization')); // null when there is none
+  const user = token === null ? null : await verifyToken(token);
+  if (!user) throw ApiError.unauthorized('Sign in to manage templates.');
+  return { actor: user.id };
+},
+```
+
+`templateManagedBackend` is for a host that serves one template backend. Set, it is the name every
+new template is stored under, so a browser cannot label a template with another backend. Unset, the
+create request's value is stored. The field stays required in the request either way, so clients
+written against the contract keep working.
 
 `authenticate` has the same shape in
 [`vintasend-api`](https://github.com/vintasoftware/vintasend-ts-api), the notifications API, so an
@@ -323,7 +357,41 @@ recognise an error by its name and code, not by its class.
 
 The app uses Web APIs only — no Node built-ins — so it also runs in a browser, over the library's
 in-memory store, for a Storybook or a demo. The standalone server (`src/index.ts`) and the
-module-path service loader are the Node-only parts.
+module-path service loader on `./server` are the Node-only parts.
+
+## Testing your mount
+
+`./testing` runs the whole API in memory: the library's real `ManagedTemplateService` over its
+`InMemoryTemplateManagerBackend`, and `createApp` over that. It is what this repository's own route
+tests run on, and it loads in a browser, so a UI's stories and tests can use it as their server.
+
+```ts
+import { createHarness, createInput, post } from 'vintasend-templates-management-api/testing';
+
+const api = createHarness();
+await api.service.createTemplate(createInput('welcome', { bodyTemplate: '<p>Hi {{ name }}</p>' }));
+
+const { status, body } = await api.json('/api/v1/templates/welcome/preview', post({
+  context: { name: 'Ana' },
+}));
+// 200, body.data.renderedBody === '<p>Hi Ana</p>'
+```
+
+- `createHarness(options?)` returns `{ app, backend, service, request, json }`. `request` sends a
+  path to the app with `Authorization: Bearer ${API_KEY}`, and `content-type: application/json`
+  when there is a body; `json` also parses the response.
+- Its options:
+  - `authenticate`, `onUnhandledError` and `templateManagedBackend` go to `createApp`. The default
+    authenticator is `apiKeyAuthenticator(API_KEY)`;
+  - `capabilities` replaces what the store reports from `getFilterCapabilities`;
+  - `now` is the store's clock, for seeding status history with fixed dates;
+  - `renderer` replaces the test renderer;
+  - `onResponse` sees every response before `request` returns it.
+- The test renderer, `TestEmailRenderer`, fills plain `{{ name }}` variables from the context and
+  leaves any it cannot fill as written. It throws on a template containing `boom`, so a story can
+  show a preview that fails (a 409 `PREVIEW_UNAVAILABLE`) with no template engine installed.
+- `createInput(key, overrides?)` is a valid first version; `post`, `put` and `patch(body)` build a
+  `RequestInit`.
 
 ## Development
 

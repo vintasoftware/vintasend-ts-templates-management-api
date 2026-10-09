@@ -271,7 +271,7 @@ describe('versions', () => {
 
     expect(status).toBe(201);
     expect(body.data).toMatchObject({ version: 2, status: 'draft', name: 'Welcome!' });
-    expect(body.data.bodyTemplate).toBe('<p>Hi {name}</p>');
+    expect(body.data.bodyTemplate).toBe('<p>Hi {{ name }}</p>');
   });
 
   it('accepts an empty body as a deliberate copy', async () => {
@@ -572,8 +572,8 @@ describe('preview', () => {
   beforeEach(async () => {
     await api.service.createTemplate(
       createInput('welcome', {
-        bodyTemplate: '<p>Hi {name}</p>',
-        subjectTemplate: 'Welcome {name}',
+        bodyTemplate: '<p>Hi {{ name }}</p>',
+        subjectTemplate: 'Welcome {{ name }}',
         preheaderTemplate: 'see inside',
       }),
     );

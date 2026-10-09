@@ -69,13 +69,16 @@ async function safeEquals(a: string, b: string): Promise<boolean> {
   return difference === 0;
 }
 
-function extractToken(header: string | undefined): string | undefined {
-  if (!header) {
-    return undefined;
-  }
-
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim();
+/**
+ * The token in an `Authorization: Bearer <token>` header, or `null` when there is none.
+ *
+ * The scheme is matched in any case, as RFC 9110 has it. For a host writing its own
+ * `Authenticator` around a token it verifies itself, such as the caller's own identity-provider
+ * token.
+ */
+export function bearerToken(header: string | undefined): string | null {
+  const token = header?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  return token ? token : null;
 }
 
 /**
@@ -85,7 +88,7 @@ function extractToken(header: string | undefined): string | undefined {
  */
 export function apiKeyAuthenticator(apiKey: string): Authenticator {
   return async (c) => {
-    const token = extractToken(c.req.header('authorization'));
+    const token = bearerToken(c.req.header('authorization'));
 
     if (!token || !(await safeEquals(token, apiKey))) {
       throw ApiError.unauthorized('A valid API key is required.');

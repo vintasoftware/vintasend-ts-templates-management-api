@@ -6,6 +6,11 @@
  * *something*, not that they call it correctly, and the parts most worth pinning here (which
  * filter a query becomes, which error a refused transition produces) live on the far side of that
  * boundary.
+ *
+ * Every response that goes through `request` or `json` is also checked against `openapi.yaml`: a
+ * client error the route does not declare fails the test that provoked it. The declarations are
+ * written by hand on the Python side, so this is what notices a route answering a status a
+ * generated client was never told about.
  */
 
 import type { Hono } from 'hono';
@@ -25,7 +30,9 @@ import {
 } from 'vintasend-managed-templates';
 
 import { type AppDependencies, createApp } from '../../src/app.js';
+import { apiKeyAuthenticator } from '../../src/middleware/authenticate.js';
 import type { ManagedTemplateServicePort } from '../../src/services/template-service-port.js';
+import { undeclaredStatus } from './contract.js';
 
 export const API_KEY = 'test-api-key';
 
@@ -80,7 +87,8 @@ export type Harness = {
 export function createHarness(
   options: {
     capabilities?: Record<string, boolean>;
-    resolveActor?: AppDependencies['resolveActor'];
+    /** Defaults to the shared API key, which every helper request carries. */
+    authenticate?: AppDependencies['authenticate'];
     onUnhandledError?: AppDependencies['onUnhandledError'];
   } = {},
 ): Harness {
@@ -95,14 +103,13 @@ export function createHarness(
   );
 
   const app = createApp({
-    apiKey: API_KEY,
+    authenticate: options.authenticate ?? apiKeyAuthenticator(API_KEY),
     getService: async () => service as unknown as ManagedTemplateServicePort,
-    resolveActor: options.resolveActor,
-    onUnhandledError: options.onUnhandledError,
+    ...(options.onUnhandledError ? { onUnhandledError: options.onUnhandledError } : {}),
   });
 
-  const request = (path: string, init: RequestInit = {}): Promise<Response> =>
-    app.request(`http://localhost${path}`, {
+  const request = async (path: string, init: RequestInit = {}): Promise<Response> => {
+    const response = await app.request(`http://localhost${path}`, {
       ...init,
       headers: {
         authorization: `Bearer ${API_KEY}`,
@@ -110,6 +117,12 @@ export function createHarness(
         ...(init.headers ?? {}),
       },
     });
+    const problem = undeclaredStatus(init.method ?? 'GET', path, response.status);
+    if (problem !== undefined) {
+      throw new Error(`openapi.yaml: ${problem}`);
+    }
+    return response;
+  };
 
   return {
     app,

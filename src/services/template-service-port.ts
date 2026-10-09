@@ -3,8 +3,8 @@
  *
  * A structural type rather than the class itself, for a reason specific to Node: the operator's
  * service module resolves its own copy of `vintasend-managed-templates`, and two copies of a class
- * fail `instanceof` even when they are the same code. So the service is validated by the methods
- * it has, which is also what actually matters here.
+ * fail `instanceof` even when they are the same code. A host injecting its service is checked by
+ * this type; a service loaded from a module path is checked by its methods, in `service-loader`.
  */
 
 import type { JsonObject } from 'vintasend';
@@ -72,7 +72,7 @@ export type ManagedTemplateServicePort = {
     version?: number | null,
   ): Promise<ManagedTemplate>;
 
-  getComposedTemplate(templateKey: string, version?: number | null): Promise<ManagedTemplate>;
+  composeTemplate(template: ManagedTemplate): Promise<ManagedTemplate>;
   getTemplateReferences(template: ManagedTemplate): TemplateReference[];
   isAbstract(template: ManagedTemplate): boolean;
 
@@ -82,56 +82,3 @@ export type ManagedTemplateServicePort = {
     context: JsonObject,
   ): Promise<RenderResult>;
 };
-
-/** The methods a loaded service must have for this API to work at all. */
-export const REQUIRED_SERVICE_METHODS = [
-  'getBackendSupportedFilterCapabilities',
-  'createTemplate',
-  'getTemplate',
-  'updateTemplate',
-  'deleteTemplate',
-  'getTemplateVersions',
-  'getPaginatedFilteredTemplates',
-  'setStatus',
-  'getStatusHistory',
-  'allowedTransitionsFor',
-  'getTags',
-  'getTag',
-  'createTag',
-  'updateTag',
-  'setTagStatus',
-  'deleteTag',
-  'setTemplateTags',
-  'getComposedTemplate',
-  'getTemplateReferences',
-  'isAbstract',
-  'renderTemplate',
-] as const satisfies readonly (keyof ManagedTemplateServicePort)[];
-
-/**
- * Check a loaded service against the port, naming what is missing.
- *
- * Turns "the factory returned the wrong thing" into a startup failure that says which methods it
- * lacked, rather than a `TypeError` on the first request that reaches one of them.
- */
-export function asManagedTemplateServicePort(service: unknown): ManagedTemplateServicePort {
-  if (service === null || typeof service !== 'object') {
-    throw new Error(
-      `Expected a ManagedTemplateService, got ${service === null ? 'null' : typeof service}.`,
-    );
-  }
-
-  const candidate = service as Record<string, unknown>;
-  const missing = REQUIRED_SERVICE_METHODS.filter(
-    (method) => typeof candidate[method] !== 'function',
-  );
-
-  if (missing.length > 0) {
-    throw new Error(
-      'The configured service is not a ManagedTemplateService: it is missing ' +
-        `${missing.join(', ')}.`,
-    );
-  }
-
-  return service as ManagedTemplateServicePort;
-}

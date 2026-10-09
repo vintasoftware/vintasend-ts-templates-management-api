@@ -1,6 +1,6 @@
 /**
- * Attribution the host controls, errors that never reach the log whole, and deletes that cannot
- * remove a published version.
+ * Authentication and attribution the host controls, errors that never reach the log whole, and
+ * deletes that cannot remove a published version.
  */
 
 import type { Context } from 'hono';
@@ -13,24 +13,52 @@ import type {
   ManagedTemplateOut,
   TemplateStatusHistoryOut,
 } from '../src/contract/types.js';
+import { ApiError } from '../src/errors.js';
 import { createHarness, createInput, type Harness, post } from './helpers/fixtures.js';
 
-describe('resolveActor', () => {
+/** A host's own authentication: the signed-in user arrives in a header its proxy sets. */
+function sessionAuthenticator(c: Context) {
+  const user = c.req.header('x-authenticated-user');
+  if (user === undefined) {
+    throw ApiError.unauthorized('Sign in first.');
+  }
+  if (user === 'viewer') {
+    throw ApiError.forbidden('Viewers cannot change templates.');
+  }
+  return { actor: user === 'anonymous' ? null : user };
+}
+
+/**
+ * What the other VintaSend API package's `ApiError` looks like from here: same name and shape, a
+ * different class.
+ */
+class ForeignApiError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+describe('authenticate', () => {
   let api: Harness;
 
   beforeEach(async () => {
-    api = createHarness({ resolveActor: (c) => c.req.header('x-authenticated-user') ?? null });
+    api = createHarness({ authenticate: sessionAuthenticator });
     await api.service.createTemplate(createInput('welcome'));
   });
 
   async function history(): Promise<TemplateStatusHistoryOut[]> {
     const { body } = await api.json<ListResponse<TemplateStatusHistoryOut>>(
       '/api/v1/templates/welcome/status-history',
+      { headers: { 'x-authenticated-user': 'auditor' } },
     );
     return body.data;
   }
 
-  it('replaces whatever changedBy the body claims', async () => {
+  it('records the actor it names, replacing whatever changedBy the body claims', async () => {
     const response = await api.request('/api/v1/templates/welcome/activate', {
       ...post({ changedBy: 'someone-else' }),
       headers: { 'x-authenticated-user': 'ana' },
@@ -58,14 +86,76 @@ describe('resolveActor', () => {
     expect((await history()).map((entry) => entry.changedBy)).toEqual(['caio', 'bia', 'ana']);
   });
 
-  it('records null when the hook resolves nobody, even if the body names someone', async () => {
-    await api.request('/api/v1/templates/welcome/activate', post({ changedBy: 'forged' }));
+  it('records null when it names nobody, even if the body names someone', async () => {
+    await api.request('/api/v1/templates/welcome/activate', {
+      ...post({ changedBy: 'forged' }),
+      headers: { 'x-authenticated-user': 'anonymous' },
+    });
 
     expect((await history())[0]?.changedBy).toBeNull();
   });
 
+  it('refuses a caller it does not know with a 401', async () => {
+    const { status, body } = await api.json<ApiErrorResponse>('/api/v1/templates/welcome');
+
+    expect(status).toBe(401);
+    expect(body.error).toEqual({ code: 'UNAUTHORIZED', message: 'Sign in first.' });
+  });
+
+  it('refuses a caller it knows and will not allow with a 403, not a 401', async () => {
+    // A 401 would tell a signed-in user to sign in again.
+    const { status, body } = await api.json<ApiErrorResponse>(
+      '/api/v1/templates/welcome/activate',
+      { ...post({}), headers: { 'x-authenticated-user': 'viewer' } },
+    );
+
+    expect(status).toBe(403);
+    expect(body.error).toEqual({
+      code: 'FORBIDDEN',
+      message: 'Viewers cannot change templates.',
+    });
+    const { body: current } = await api.json<DataResponse<ManagedTemplateOut>>(
+      '/api/v1/templates/welcome',
+      { headers: { 'x-authenticated-user': 'ana' } },
+    );
+    expect(current.data.status).toBe('draft');
+  });
+
+  it('may throw the ApiError of the notifications API, so one function serves both', async () => {
+    const foreign = createHarness({
+      authenticate: () => {
+        throw new ForeignApiError('FORBIDDEN', 'Refused.');
+      },
+    });
+
+    const { status, body } = await foreign.json<ApiErrorResponse>('/api/v1/templates');
+
+    expect(status).toBe(403);
+    expect(body).toEqual({ error: { code: 'FORBIDDEN', message: 'Refused.' } });
+  });
+
+  it('treats an ApiError with a code this contract lacks as unexpected', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const foreign = createHarness({
+      authenticate: () => {
+        throw new ForeignApiError('UPSTREAM_ERROR', 'Not here.');
+      },
+    });
+
+    const response = await foreign.app.request('http://localhost/api/v1/templates');
+
+    expect(response.status).toBe(500);
+    vi.restoreAllMocks();
+  });
+
+  it('runs before the request is validated', async () => {
+    const { status } = await api.json<ApiErrorResponse>('/api/v1/templates/welcome/versions/1abc');
+
+    expect(status).toBe(401);
+  });
+
   it('may be asynchronous', async () => {
-    const asyncApi = createHarness({ resolveActor: async () => 'resolved-later' });
+    const asyncApi = createHarness({ authenticate: async () => ({ actor: 'resolved-later' }) });
     await asyncApi.service.createTemplate(createInput('welcome'));
 
     await asyncApi.request('/api/v1/templates/welcome/activate', post({ changedBy: 'forged' }));
@@ -76,7 +166,7 @@ describe('resolveActor', () => {
     expect(body.data[0]?.changedBy).toBe('resolved-later');
   });
 
-  it('keeps taking changedBy from the body when no hook is configured', async () => {
+  it('keeps taking changedBy from the body when it names no actor', async () => {
     const plain = createHarness();
     await plain.service.createTemplate(createInput('welcome'));
 

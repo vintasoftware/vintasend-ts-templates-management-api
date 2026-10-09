@@ -9,12 +9,11 @@
  * wants more — an error tracker with its own scrubbing, say — injects `onUnhandledError`.
  */
 
-import { randomUUID } from 'node:crypto';
 import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
 import type { ApiErrorResponse } from '../contract/types.js';
-import { ApiError } from '../errors.js';
+import { asApiError, invalidRequest } from '../errors.js';
 
 /**
  * Receives every error the API does not map to a contract error, before the generic 500 is sent.
@@ -37,7 +36,7 @@ const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
 /** The caller's `X-Request-Id` when it is safe to log, otherwise a fresh one. */
 export function requestIdFor(c: Context): string {
   const supplied = c.req.header(REQUEST_ID_HEADER);
-  return supplied !== undefined && SAFE_REQUEST_ID.test(supplied) ? supplied : randomUUID();
+  return supplied !== undefined && SAFE_REQUEST_ID.test(supplied) ? supplied : crypto.randomUUID();
 }
 
 /**
@@ -89,8 +88,16 @@ export function createErrorHandler(
   onUnhandledError: UnhandledErrorHandler = logUnhandledError,
 ): ErrorHandler {
   return async (error, c) => {
-    if (error instanceof ApiError) {
-      return c.json<ApiErrorResponse>(error.toResponseBody(), error.status as 400);
+    const contractError = asApiError(error);
+    if (contractError !== undefined) {
+      return c.json<ApiErrorResponse>(contractError.toResponseBody(), contractError.status as 400);
+    }
+
+    // Hono's validator refusing a body that declares JSON and is not: empty, or malformed. It is
+    // invalid input like any other, so it gets the same `details.issues`.
+    if (error instanceof HTTPException && error.status === 400) {
+      const refusal = invalidRequest([{ path: [], message: error.message }]);
+      return c.json<ApiErrorResponse>(refusal.toResponseBody(), 400);
     }
 
     if (error instanceof HTTPException) {

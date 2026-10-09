@@ -168,7 +168,7 @@ export function buildBackendFilter(
 
   for (const { wire, capability, field } of TAG_FIELDS) {
     const tags = query[wire];
-    // `if (tags?.length)` rather than `!== undefined`: query validation already rejects a list with
+    // A non-empty array rather than `!== undefined`: query validation already rejects a list with
     // nothing usable in it, so an empty one here can only be an absent parameter. Passing `[]`
     // through would be a filter that matches everything or nothing depending on which of the two
     // it is — a meaning no caller asked for.
@@ -202,21 +202,24 @@ export function buildOrderBy(
     // A direction on its own has nothing to order, and silently ignoring it would hide a
     // client bug that looks exactly like a backend that cannot sort.
     if (query.orderByDirection !== undefined) {
-      throw ApiError.badRequest(
-        'orderByDirection was given without orderByField, so there is nothing to order by.',
-        { orderByDirection: query.orderByDirection },
-      );
+      const message =
+        'orderByDirection was given without orderByField, so there is nothing to order by.';
+      throw ApiError.badRequest(message, [{ path: 'orderByDirection', message }], {
+        orderByDirection: query.orderByDirection,
+      });
     }
     return undefined;
   }
 
   const capability = orderByCapabilityKey(query.orderByField);
   if (!supportsCapability(capabilities, capability)) {
-    throw ApiError.badRequest(
+    const message =
       `The configured template backend cannot order by '${query.orderByField}'. ` +
-        'GET /capabilities lists the fields it can order by.',
-      { orderByField: query.orderByField, capability },
-    );
+      'GET /capabilities lists the fields it can order by.';
+    throw ApiError.badRequest(message, [{ path: 'orderByField', message }], {
+      orderByField: query.orderByField,
+      capability,
+    });
   }
 
   return {

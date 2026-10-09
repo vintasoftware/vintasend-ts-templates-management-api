@@ -16,6 +16,14 @@
       "types": "./dist/exports.d.ts",
       "import": "./dist/exports.js"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
     "./openapi.yaml": "./openapi.yaml",
     "./package.json": "./package.json"
   },
@@ -28,6 +36,7 @@
     "README.md",
     "LICENSE"
   ],
+  "sideEffects": false,
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -39,18 +48,25 @@
     "format": "biome check --write ."
   },
   "dependencies": {
-    "@hono/node-server": "^1.14.0",
-    "@hono/zod-validator": "^0.4.3",
-    "hono": "^4.7.0",
-    "zod": "^3.24.2"
+    "@hono/zod-validator": "^0.9.1",
+    "hono": "^4.11.2",
+    "zod": "^4.6.5"
   },
   "peerDependencies": {
+    "@hono/node-server": "^1.14.0",
     "vintasend": "^1.0.0-alpha6",
     "vintasend-managed-templates": "^1.0.0-alpha6"
   },
+  "peerDependenciesMeta": {
+    "@hono/node-server": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.5.10",
+    "@hono/node-server": "^1.14.0",
     "@types/node": "^25.0.8",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.3",
     "typescript": "^5.9.3",
     "vintasend": "1.0.0-alpha6",

@@ -47,6 +47,8 @@ import { validate } from './validation.js';
 
 export type TemplateRoutesDependencies = {
   getService: () => Promise<ServiceCaller>;
+  /** See `AppDependencies.templateManagedBackend`. */
+  templateManagedBackend?: string;
 };
 
 export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
@@ -165,7 +167,7 @@ export function createTemplateRoutes(deps: TemplateRoutesDependencies): Hono {
       key: body.key,
       name: body.name,
       description: body.description,
-      templateManagedBackend: body.templateManagedBackend,
+      templateManagedBackend: deps.templateManagedBackend ?? body.templateManagedBackend,
       bodyTemplate: body.bodyTemplate,
       subjectTemplate: body.subjectTemplate ?? null,
       preheaderTemplate: body.preheaderTemplate ?? null,

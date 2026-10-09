@@ -41,6 +41,15 @@ export type AppDependencies = {
    * client gets the generic 500 either way.
    */
   onUnhandledError?: UnhandledErrorHandler;
+  /**
+   * The backend name every new template is stored under. When set, it replaces the
+   * `templateManagedBackend` the create request carries, so a host serving one backend does not
+   * let a browser label a template with another. When absent, the request's value is stored.
+   *
+   * The field stays required in the contract either way, so clients written against it keep
+   * working.
+   */
+  templateManagedBackend?: string;
 };
 
 export const API_BASE_PATH = `/api/${API_VERSION}`;
@@ -85,7 +94,10 @@ export function createApp(deps: AppDependencies): Hono {
   app.get('/health', (c) => c.json<HealthResponse>({ status: 'ok', apiVersion: API_VERSION }));
 
   app.use(`${API_BASE_PATH}/*`, authenticateWith(deps.authenticate));
-  app.route(API_BASE_PATH, createTemplateRoutes({ getService }));
+  app.route(
+    API_BASE_PATH,
+    createTemplateRoutes({ getService, templateManagedBackend: deps.templateManagedBackend }),
+  );
   app.route(API_BASE_PATH, createTagRoutes({ getService }));
 
   return app;
